@@ -1,0 +1,591 @@
+---
+title: "Administration Controller: User, Role, and Claims Management"
+sidebarTitle: "Administration"
+description: "Reference for AdministrationController, RoleController, MedicsController, TimeTurnController, and FirebaseController endpoints. Most require the Admin role."
+---
+
+Turnero groups its back-office management functionality across five controllers. `AdministrationController` handles ASP.NET Core Identity user and role administration — including claims management and role-membership editing. `RoleController` provides basic CRUD for `IdentityRole` records. `MedicsController` manages the `Medic` catalogue that links Identity users to doctor profiles used throughout the scheduling system. `TimeTurnController` manages the `TimeTurn` time-slot catalogue that populates appointment time dropdowns. `FirebaseController` is a JSON API controller that delegates Firebase Authentication operations to an `IFirebaseService` and is entirely unauthenticated.
+
+Unless otherwise noted, every MVC action in this group requires the `Admin` role.
+
+---
+
+## AdministrationController
+
+The `AdministrationController` class is decorated with `[Authorize(Roles = "Admin")]`. It uses ASP.NET Core's `UserManager<IdentityUser>` and `RoleManager<IdentityRole>` to inspect and mutate the identity store.
+
+### Endpoint summary
+
+| Method | Path | Roles | Description |
+|--------|------|-------|-------------|
+| `GET` | `/Administration/ListUsers` | Admin | Lists all registered users |
+| `GET` | `/Administration/EditUser/{id}` | Admin | Edit user form |
+| `POST` | `/Administration/EditUser` | Admin | Persists user edits |
+| `POST` | `/Administration/DeleteUser` | Admin | Deletes a user account |
+| `GET` | `/Administration/ListRoles` | Admin | Lists all identity roles |
+| `GET` | `/Administration/CreateRole` | Admin | New role form |
+| `POST` | `/Administration/CreateRole` | Admin | Creates a new role |
+| `GET` | `/Administration/EditRole/{id}` | Admin | Edit role form |
+| `POST` | `/Administration/EditRole` | Admin | Persists role edits |
+| `POST` | `/Administration/DeleteRole` | Admin | Deletes a role |
+| `GET` | `/Administration/ManageUserClaims` | Admin | User claims form |
+| `POST` | `/Administration/ManageUserClaims` | Admin | Saves claim assignments |
+| `GET` | `/Administration/EditUsersInRole/{roleId}` | Admin | Role membership form |
+| `POST` | `/Administration/EditUsersInRole` | Admin | Saves role membership |
+
+---
+
+### GET /Administration/ListUsers
+
+Returns the `ListUsers` view with all `IdentityUser` records from the store. No filtering or pagination is applied server-side.
+
+**Response:** HTML view `ListUsers` with `IQueryable<IdentityUser>`.
+
+---
+
+### GET /Administration/EditUser/{id}
+
+Loads the specified user together with their current claims and roles, and returns the `EditUser` view populated with an `EditUserViewModel`.
+
+<ParamField path="id" type="string" required>
+  The ASP.NET Core Identity user ID (string format, e.g. a GUID string).
+</ParamField>
+
+**Response:** HTML view `EditUser` with an `EditUserViewModel`, or `NotFound` view when the user does not exist.
+
+**EditUserViewModel fields:**
+
+<ResponseField name="Id" type="string">Identity user ID.</ResponseField>
+<ResponseField name="UserName" type="string">Username.</ResponseField>
+<ResponseField name="Email" type="string">Email address.</ResponseField>
+<ResponseField name="Claims" type="string[]">List of claim values currently assigned to the user.</ResponseField>
+<ResponseField name="Roles" type="string[]">List of role names the user belongs to.</ResponseField>
+
+---
+
+### POST /Administration/EditUser
+
+Applies changes to the specified user's `Email` and `UserName` via `UserManager.UpdateAsync`. On success, redirects to `ListUsers`.
+
+**Request** — `application/x-www-form-urlencoded`
+
+<ParamField body="Id" type="string" required>
+  Identity user ID. Used to locate the record before saving.
+</ParamField>
+
+<ParamField body="UserName" type="string" required>
+  New username.
+</ParamField>
+
+<ParamField body="Email" type="string" required>
+  New email address. Must be a valid email format.
+</ParamField>
+
+**Responses:** Redirect to `ListUsers` on success, or re-render the `EditUser` view with `ModelState` errors on failure. Returns the `Error` view on `DbUpdateException`.
+
+---
+
+### POST /Administration/DeleteUser
+
+Deletes the specified user account via `UserManager.DeleteAsync`.
+
+<ParamField body="id" type="string" required>
+  Identity user ID to delete.
+</ParamField>
+
+**Responses:** Redirect to `ListUsers` on success, or `NotFound` / `ListUsers` views with errors on failure. Returns the `Error` view on `DbUpdateException`.
+
+---
+
+### GET /Administration/ListRoles
+
+Returns the `ListRoles` view with all roles from `RoleManager.Roles`.
+
+**Response:** HTML view `ListRoles` with `IQueryable<IdentityRole>`.
+
+---
+
+### GET /Administration/CreateRole
+
+Returns the `CreateRole` view with a new blank `IdentityRole` model.
+
+**Response:** HTML view `CreateRole`.
+
+---
+
+### POST /Administration/CreateRole
+
+Creates a new role via `RoleManager.CreateAsync` and redirects to `ListRoles`.
+
+<ParamField body="Name" type="string" required>
+  The name for the new role (e.g. `"Ingreso"`, `"Medico"`, `"Admin"`).
+</ParamField>
+
+**Response:** Redirect to `ListRoles`.
+
+---
+
+### GET /Administration/EditRole/{id}
+
+Loads the specified role and builds an `EditRoleViewModel` that includes a list of all users currently in the role.
+
+<ParamField path="id" type="string" required>
+  The `IdentityRole.Id` to edit.
+</ParamField>
+
+**Response:** HTML view `EditRole` with `EditRoleViewModel`, or `NotFound` view.
+
+**EditRoleViewModel fields:**
+
+<ResponseField name="Id" type="string">Role ID.</ResponseField>
+<ResponseField name="RoleName" type="string">Current role name.</ResponseField>
+<ResponseField name="Users" type="string[]">Usernames of all users presently in this role.</ResponseField>
+
+---
+
+### POST /Administration/EditRole
+
+Renames the role via `RoleManager.UpdateAsync`. Redirects to `ListRoles` on success.
+
+<ParamField body="Id" type="string" required>
+  The `IdentityRole.Id` to update.
+</ParamField>
+
+<ParamField body="RoleName" type="string" required>
+  New name for the role.
+</ParamField>
+
+**Responses:** Redirect to `ListRoles` on success, re-render `EditRole` view with errors on failure, or `Error` view on `DbUpdateException`.
+
+---
+
+### POST /Administration/DeleteRole
+
+Deletes the specified role via `RoleManager.DeleteAsync`. Roles that still have assigned users cannot be deleted; a `DbUpdateException` is caught and the `Error` view is returned with a descriptive message.
+
+<ParamField body="id" type="string" required>
+  The `IdentityRole.Id` to delete.
+</ParamField>
+
+**Responses:** Redirect to `ListRoles` on success, `NotFound` or `Error` view on failure.
+
+---
+
+### GET /Administration/ManageUserClaims
+
+Loads all claims from `ClaimsStore.AllClaims` and marks which are currently assigned to the user. Returns the `ManageUserClaims` view.
+
+<ParamField query="userId" type="string" required>
+  Identity user ID whose claims to manage.
+</ParamField>
+
+**Response:** HTML view `ManageUserClaims` with a `UserClaimsViewModel`, or `NotFound` view.
+
+**UserClaimsViewModel structure:**
+
+<ResponseField name="UserId" type="string">Identity user ID.</ResponseField>
+<ResponseField name="Claims" type="UserClaim[]">All application claims, each with `ClaimType` and `IsSelected` flag indicating current assignment.</ResponseField>
+
+---
+
+### POST /Administration/ManageUserClaims
+
+Replaces the user's claims entirely: first removes all existing claims, then adds those from the submitted model where `IsSelected` is `true`. Both the claim type and value are set to the claim's type string. Redirects to `EditUser` on success.
+
+**Request** — `application/x-www-form-urlencoded`
+
+<ParamField body="UserId" type="string" required>
+  Identity user ID.
+</ParamField>
+
+<ParamField body="Claims[n][ClaimType]" type="string">
+  Claim type for the nth claim entry.
+</ParamField>
+
+<ParamField body="Claims[n][IsSelected]" type="boolean">
+  Whether the nth claim should be assigned to the user.
+</ParamField>
+
+**Response:** Redirect to `EditUser` on success, or re-render `ManageUserClaims` view with errors on failure.
+
+---
+
+### GET /Administration/EditUsersInRole/{roleId}
+
+Builds a list of all users with a flag indicating whether each is currently in the specified role. Returns the `EditUsersInRole` view.
+
+<ParamField path="roleId" type="string" required>
+  The `IdentityRole.Id` whose membership to edit.
+</ParamField>
+
+**Response:** HTML view `EditUsersInRole` with `List<UserRoleViewModel>`, or `NotFound` view.
+
+**UserRoleViewModel per user:**
+
+<ResponseField name="UserId" type="string">Identity user ID.</ResponseField>
+<ResponseField name="UserName" type="string">Username.</ResponseField>
+<ResponseField name="IsSelected" type="boolean">Whether the user is currently in the role.</ResponseField>
+
+---
+
+### POST /Administration/EditUsersInRole
+
+Iterates over the submitted list and adds or removes each user from the role as indicated by their `IsSelected` flag. Users already in the correct state are skipped. Redirects to `EditRole` on completion.
+
+<ParamField body="roleId" type="string" required>
+  The `IdentityRole.Id` being edited (passed as a query or route value alongside the form body).
+</ParamField>
+
+<ParamField body="[n][UserId]" type="string">
+  Identity user ID for the nth entry.
+</ParamField>
+
+<ParamField body="[n][IsSelected]" type="boolean">
+  Target membership state for the nth user.
+</ParamField>
+
+**Response:** Redirect to `EditRole` on success, or `NotFound` view when the role does not exist.
+
+---
+
+## RoleController
+
+`RoleController` is a lean complement to the role-management actions on `AdministrationController`. It provides an independent index listing and a simple create flow using `RoleManager<IdentityRole>`. All actions require the `Admin` role.
+
+### Endpoint summary
+
+| Method | Path | Roles | Description |
+|--------|------|-------|-------------|
+| `GET` | `/Role/Index` | Admin | Lists all roles |
+| `GET` | `/Role/Create` | Admin | New role form |
+| `POST` | `/Role/Create` | Admin | Creates a role and redirects to Index |
+
+---
+
+### GET /Role/Index
+
+Returns the `Index` view with all roles from `RoleManager.Roles`.
+
+**Response:** HTML view `Index` with `List<IdentityRole>`.
+
+---
+
+### GET /Role/Create
+
+Returns the `Create` view with a blank `IdentityRole` model.
+
+**Response:** HTML view `Create`.
+
+---
+
+### POST /Role/Create
+
+Creates the role via `RoleManager.CreateAsync` and redirects to `Index`.
+
+<ParamField body="Name" type="string" required>
+  The name for the new role.
+</ParamField>
+
+**Response:** Redirect to `Role/Index`.
+
+---
+
+## MedicsController
+
+`MedicsController` manages the `Medic` catalogue — the bridge between ASP.NET Core Identity users and the doctor profiles that own appointments, visits, and other clinical records. A medic record consists of a `Name` string and a `UserGuid` that matches the Identity user's `Id`. All actions require the `Admin` role.
+
+### Endpoint summary
+
+| Method | Path | Roles | Description |
+|--------|------|-------|-------------|
+| `GET` | `/Medics/Index` | Admin | Lists all medics |
+| `GET` | `/Medics/Details/{id}` | Admin | Medic detail view |
+| `GET` | `/Medics/CreateAsync` | Admin | New medic form |
+| `POST` | `/Medics/Create` | Admin | Inserts a medic |
+| `GET` | `/Medics/Edit/{id}` | Admin | Edit medic (redirects to Index) |
+| `POST` | `/Medics/Edit` | Admin | Updates a medic |
+| `GET` | `/Medics/Delete/{id}` | Admin | Delete confirmation (redirects to Index) |
+| `POST` | `/Medics/Delete` | Admin | Deletes a medic |
+
+---
+
+### GET /Medics/Index
+
+Returns the `Index` view with all medic records via `getMedicsServices.GetMedics()`.
+
+**Response:** HTML view `Index` with `IEnumerable<Medic>`.
+
+---
+
+### GET /Medics/Details/{id}
+
+Returns the `Details` view for the specified medic.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Medic.Id` to display.
+</ParamField>
+
+**Response:** HTML view `Details` with the `Medic` model, or `NotFound` view.
+
+---
+
+### GET /Medics/CreateAsync
+
+Populates `ViewBag.User` with all Identity users in the `"Medico"` role, prepending a placeholder `"Seleccione..."` entry, and returns the `CreateAsync` view.
+
+**Response:** HTML view `CreateAsync`.
+
+---
+
+### POST /Medics/Create
+
+Inserts a new `Medic` record and redirects to `Index`. Requires a valid anti-forgery token and a valid `ModelState`.
+
+<ParamField body="Name" type="string" required>
+  Display name for the doctor.
+</ParamField>
+
+<ParamField body="UserGuid" type="string" required>
+  The ASP.NET Core Identity user ID to link this medic record to. Must correspond to a user in the `"Medico"` role.
+</ParamField>
+
+**Response:** Redirect to `Medics/Index` on success, or re-render the view with the model on validation failure.
+
+---
+
+### GET /Medics/Edit/{id}
+
+Looks up the medic by ID and redirects to `Index`. The actual edit form is handled in the POST action below.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Medic.Id` to edit.
+</ParamField>
+
+**Response:** Redirect to `Medics/Index`, or `NotFound` view when not found.
+
+---
+
+### POST /Medics/Edit
+
+Updates the specified medic record. Requires a valid anti-forgery token and `ModelState`. Uses `updateMedicServices.Update(medic)`.
+
+<ParamField body="Id" type="string (GUID)" required>
+  The `Medic.Id` to update. Validated for existence before the update call.
+</ParamField>
+
+<ParamField body="Name" type="string" required>
+  Updated display name.
+</ParamField>
+
+<ParamField body="UserGuid" type="string">
+  Updated linked Identity user ID.
+</ParamField>
+
+**Response:** Redirect to `Medics/Index` on success, `NotFound` view if the medic does not exist, or `Error` view if `Update` returns `false`.
+
+---
+
+### GET /Medics/Delete/{id}
+
+Confirms the medic exists and redirects to `Index`. Serves as the confirmation step before the POST delete.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Medic.Id` to delete.
+</ParamField>
+
+**Response:** Redirect to `Medics/Index`, or `NotFound` view when not found.
+
+---
+
+### POST /Medics/Delete (ActionName: "Delete")
+
+Deletes the specified medic if it exists via `updateMedicServices.Delete(medic)`. Requires a valid anti-forgery token.
+
+<ParamField body="id" type="string (GUID)" required>
+  The `Medic.Id` to delete.
+</ParamField>
+
+**Response:** Redirect to `Medics/Index`.
+
+---
+
+## TimeTurnController
+
+`TimeTurnController` manages the `TimeTurn` time-slot catalogue. Each `TimeTurn` record has an auto-generated `Guid` ID and a `Time` string (e.g. `"09:00"`). These records populate the time dropdown on the appointment create/edit forms and are cached in `IMemoryCache` for performance. All actions require the `Admin` role.
+
+### Endpoint summary
+
+| Method | Path | Roles | Description |
+|--------|------|-------|-------------|
+| `GET` | `/TimeTurn/Index` | Admin | Lists all time slots |
+| `GET` | `/TimeTurn/Create` | Admin | New time-slot form |
+| `POST` | `/TimeTurn/Create` | Admin | Inserts a time slot |
+| `GET` | `/TimeTurn/Delete/{id}` | Admin | Delete confirmation view |
+| `POST` | `/TimeTurn/Delete` (ActionName: Delete) | Admin | Deletes a time slot |
+
+---
+
+### GET /TimeTurn/Index
+
+Returns the `Index` view with all `TimeTurn` records via `getTimeTurns.GetTimeTurns()`.
+
+**Response:** HTML view `Index` with `IEnumerable<TimeTurn>`.
+
+---
+
+### GET /TimeTurn/Create
+
+Returns the `Create` view with a blank form.
+
+**Response:** HTML view `Create`.
+
+---
+
+### POST /TimeTurn/Create
+
+Inserts a new `TimeTurn` record. Only `Id` and `Time` are bound from the form (via `[Bind("Id,Time")]`). Requires a valid anti-forgery token and `ModelState`.
+
+<ParamField body="Id" type="string (GUID)">
+  Optional client-supplied GUID. The database generates one automatically.
+</ParamField>
+
+<ParamField body="Time" type="string" required>
+  The appointment time string in `HH:mm` format (e.g. `"08:30"`, `"14:00"`).
+</ParamField>
+
+**Response:** Redirect to `TimeTurn/Index` on success, or re-render the `Create` view with the model on validation failure.
+
+---
+
+### GET /TimeTurn/Delete/{id}
+
+Loads the time slot for confirmation and returns the `Delete` view.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `TimeTurn.Id` to confirm deletion of.
+</ParamField>
+
+**Response:** HTML view `Delete` with the `TimeTurn` model, or `NotFound` view.
+
+---
+
+### POST /TimeTurn/Delete (ActionName: "Delete")
+
+Deletes the specified `TimeTurn` record. Requires a valid anti-forgery token.
+
+<ParamField body="id" type="string (GUID)" required>
+  The `TimeTurn.Id` to delete.
+</ParamField>
+
+**Response:** Redirect to `TimeTurn/Index`.
+
+---
+
+## FirebaseController
+
+`FirebaseController` is a JSON API controller (`[ApiController]`, `[Route("api/[controller]")]`) that exposes two Firebase Authentication endpoints. Both actions are decorated with `[AllowAnonymous]` — they accept unauthenticated requests so that mobile or external clients can register and log in without a prior session cookie. The controller delegates all logic to an `IFirebaseService` implementation.
+
+### Endpoint summary
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/Firebase/register` | Anonymous | Registers a new Firebase user |
+| `POST` | `/api/Firebase/login` | Anonymous | Authenticates and returns a token |
+
+---
+
+### POST /api/Firebase/register
+
+Registers a new user in Firebase Authentication by calling `firebaseService.RegisterAsync(userRegister)`. Returns the `UserRecord` created by the Firebase Admin SDK.
+
+**Request** — `application/json`
+
+<ParamField body="Name" type="string">
+  Display name for the new Firebase user.
+</ParamField>
+
+<ParamField body="Email" type="string" required>
+  Email address for the new account.
+</ParamField>
+
+<ParamField body="Password" type="string" required>
+  Password for the new account.
+</ParamField>
+
+<ParamField body="Role" type="string">
+  Optional role string to associate with the Firebase user (application-layer concept; not a Firebase custom claim unless implemented in the service).
+</ParamField>
+
+**Response** — `200 OK`, `application/json`
+
+Returns the Firebase Admin SDK `UserRecord` object for the newly created user. Key fields include:
+
+<ResponseField name="Uid" type="string">Firebase UID assigned to the user.</ResponseField>
+<ResponseField name="Email" type="string">Email address of the registered user.</ResponseField>
+<ResponseField name="DisplayName" type="string">Display name set during registration.</ResponseField>
+<ResponseField name="EmailVerified" type="boolean">Whether the email address has been verified.</ResponseField>
+<ResponseField name="Disabled" type="boolean">Whether the account is disabled.</ResponseField>
+
+**Example request:**
+
+```json
+{
+  "name": "Dr. Ana Martínez",
+  "email": "ana.martinez@clinica.com",
+  "password": "S3cur3P@ss!",
+  "role": "Medico"
+}
+```
+
+---
+
+### POST /api/Firebase/login
+
+Authenticates a user against Firebase Authentication by calling `firebaseService.LoginAsync(request)`. Returns a token object that clients can use for subsequent authenticated calls.
+
+**Request** — `application/json`
+
+<ParamField body="Email" type="string" required>
+  The user's email address.
+</ParamField>
+
+<ParamField body="Password" type="string" required>
+  The user's password.
+</ParamField>
+
+**Response** — `200 OK`, `application/json`
+
+Returns an `AuthFirebase`-compatible token object. Key fields:
+
+<ResponseField name="kind" type="string">Firebase response kind identifier.</ResponseField>
+<ResponseField name="localId" type="string">Firebase UID of the authenticated user.</ResponseField>
+<ResponseField name="email" type="string">Authenticated user's email.</ResponseField>
+<ResponseField name="displayName" type="string">User's display name.</ResponseField>
+<ResponseField name="idToken" type="string">Firebase ID token (JWT) for use in `Authorization: Bearer` headers.</ResponseField>
+<ResponseField name="refreshToken" type="string">Long-lived refresh token for obtaining new ID tokens.</ResponseField>
+<ResponseField name="expiresIn" type="integer">Seconds until the `idToken` expires (typically `3600`).</ResponseField>
+<ResponseField name="registered" type="boolean">`true` when the user was previously registered.</ResponseField>
+
+**Example request:**
+
+```json
+{
+  "email": "ana.martinez@clinica.com",
+  "password": "S3cur3P@ss!"
+}
+```
+
+**Example response:**
+
+```json
+{
+  "kind": "identitytoolkit#VerifyPasswordResponse",
+  "localId": "abc123XYZ",
+  "email": "ana.martinez@clinica.com",
+  "displayName": "Dr. Ana Martínez",
+  "idToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refreshToken": "AMf-vBy...",
+  "expiresIn": 3600,
+  "registered": true
+}
+```

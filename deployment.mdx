@@ -1,0 +1,275 @@
+---
+title: "Deploy Turnero to a Linux VPS with GitHub Actions"
+sidebarTitle: "Deployment"
+description: "Set up the Turnero CI/CD pipeline with GitHub Actions to automatically build, publish, and deploy to a Linux server when tests pass on the master branch."
+---
+
+Turnero ships with a two-stage GitHub Actions pipeline that handles the full continuous delivery lifecycle. The first workflow compiles and tests the application; if and only if those checks pass on the `master` branch, the second workflow publishes a self-contained Linux binary, copies it to your server over SCP, and hot-swaps the running systemd service — all without any manual intervention. The sections below walk through both workflows, the required secrets, server setup, and the `appsettings.json` backup mechanism that preserves your production configuration across every deploy.
+
+## How the Two Workflows Fit Together
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Push / PR to master                                        │
+│                                                             │
+│  ① dotnetcore.yml  (.NET Core)                             │
+│     dotnet restore → dotnet build → dotnet test            │
+│                         │                                   │
+│               conclusion == success                         │
+│               head_branch == master                         │
+│                         │                                   │
+│  ② DeployProd.yml  (Deploy Prod)       ← triggered by ①   │
+│     dotnet publish → zip → SCP → swap appsettings → start  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Workflow 1 — `.NET Core` (`dotnetcore.yml`)
+
+This workflow runs on every push to `master` and on pull requests targeting `master`, `develop`, or `API`. It restores NuGet dependencies, builds the entire solution, and executes the test suite:
+
+```yaml
+name: .NET Core
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master, develop, API ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@master
+      - name: Setup .NET
+        uses: actions/setup-dotnet@master
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore dependencies
+        run: dotnet restore
+      - name: Build
+        run: dotnet build --no-restore
+      - name: Test
+        run: dotnet test --no-build --verbosity normal
+```
+
+### Workflow 2 — `Deploy Prod` (`DeployProd.yml`)
+
+This workflow is triggered by the `workflow_run` event, meaning it fires automatically when the `.NET Core` workflow finishes. It performs the actual deployment steps: publish a self-contained Linux binary, create a ZIP archive, stop the remote service, upload the archive via SCP, unzip it, restore the backed-up `appsettings.json`, and restart the service:
+
+```yaml
+name: Deploy Prod
+
+on:
+  workflow_run:
+    workflows: [".NET Core"]
+    types:
+      - completed
+
+jobs:
+  deploy:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'master'
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@master
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@master
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build and publish
+        run: |
+          dotnet publish -c Release --nologo -r linux-x64 --self-contained -o ./TurneroApp
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@master
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Create ZIP
+        uses: montudor/action-zip@master
+        with:
+          args: zip -qq -r TurneroApp.zip TurneroApp
+
+      - name: Stop Server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER }}
+          username: ${{ secrets.USER_NAME }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.PORT }}
+          script: |
+            service turnero stop
+
+      - name: copy file via ssh
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.SERVER }}
+          username: ${{ secrets.USER_NAME }}
+          port: ${{ secrets.PORT }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          source: TurneroApp.zip
+          target: ${{ secrets.SRV_PATH }}
+
+      - name: Restart Server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER }}
+          username: ${{ secrets.USER_NAME }}
+          port: ${{ secrets.PORT }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          script: |
+            unzip -o ${{ secrets.SRV_PATH }}/TurneroApp.zip
+            rm ${{ secrets.SRV_PATH }}/TurneroApp.zip
+            cp ${{ secrets.SRV_PATH }}/appsettings.json.bak \
+               ${{ secrets.SRV_PATH }}/TurneroApp/appsettings.json
+            service turnero start
+```
+
+<Warning>
+  The `Deploy Prod` workflow only runs when **both** conditions are true: the `.NET Core` workflow completed with `conclusion == 'success'` **and** the triggering branch is `master`. A successful build on any other branch — including `develop` or `API` — will not trigger a deployment.
+</Warning>
+
+## Required GitHub Repository Secrets
+
+Navigate to **Settings → Secrets and variables → Actions** in your GitHub repository and add each of the following secrets. All are consumed by the `DeployProd.yml` workflow:
+
+| Secret name | Description |
+|-------------|-------------|
+| `SERVER` | Hostname or IP address of the target Linux server |
+| `USER_NAME` | SSH username on the server (e.g. `deploy` or `ubuntu`) |
+| `SSH_PASSWORD` | Password for the SSH user (used by `appleboy/ssh-action` and `appleboy/scp-action`) |
+| `PORT` | SSH port on the server — usually `22` |
+| `SRV_PATH` | Absolute path on the server where `TurneroApp.zip` is copied and unpacked (e.g. `/opt/turnero`) |
+| `SSH_PRIVATE_KEY` | Private key for the `webfactory/ssh-agent` step; the corresponding public key must be in `~/.ssh/authorized_keys` on the server |
+
+<Note>
+  Both `SSH_PASSWORD` and `SSH_PRIVATE_KEY` are used in this workflow — `ssh-agent` loads the private key for the publish step, while the `appleboy` actions use the password. Make sure both are set even if your server also accepts key-based authentication.
+</Note>
+
+## The `appsettings.json` Backup Mechanism
+
+The `dotnet publish` command embeds a fresh `appsettings.json` from the source tree in every build artifact. That file intentionally contains no secrets (connection strings, Firebase credentials, JWT settings) — those live outside source control on the production server.
+
+The `Restart Server` step solves this automatically:
+
+```bash
+cp ${{ secrets.SRV_PATH }}/appsettings.json.bak \
+   ${{ secrets.SRV_PATH }}/TurneroApp/appsettings.json
+```
+
+It copies a file named `appsettings.json.bak` from `SRV_PATH` back over the freshly published one. **You must create this backup file once, manually, the first time you set up the server.** After that, every deployment restores it automatically.
+
+<Warning>
+  If `appsettings.json.bak` does not exist at `SRV_PATH` when the workflow runs, the copy step will fail and the service will start with an empty configuration — meaning no database connection string and no authentication settings. Create this file before running your first automated deployment.
+</Warning>
+
+A minimal production `appsettings.json.bak` looks like:
+
+```json
+{
+  "AllowedHosts": "*",
+  "secretsFolder": "aspnet-Turnero-1D8EA02B-D124-439A-B5F8-DE2044EFFABA",
+  "Caller": "https://yourdomain.com/",
+  "ConnectionStrings": {
+    "LocalConnection": "Host=localhost;Port=5432;Database=turnero;Username=turnero_user;Password=strongpassword"
+  },
+  "Authentication": {
+    "ValidIssuer": "https://securetoken.google.com/your-firebase-project",
+    "Audience": "your-firebase-project",
+    "TokenUri": "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=YOUR_API_KEY"
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Warning",
+      "Microsoft": "Warning",
+      "Microsoft.Hosting.Lifetime": "Information"
+    }
+  }
+}
+```
+
+## Setting Up the Linux systemd Service
+
+The workflow stops and starts a systemd service named `turnero`. You need to create this service unit on the server before the first deployment. Log in to your server and create the unit file:
+
+```bash
+sudo nano /etc/systemd/system/turnero.service
+```
+
+Paste the following unit file, adjusting `WorkingDirectory`, `ExecStart`, and `User` to match your environment:
+
+```ini
+[Unit]
+Description=Turnero Medical Appointment Platform
+After=network.target postgresql.service
+
+[Service]
+Type=notify
+User=www-data
+WorkingDirectory=/opt/turnero/TurneroApp
+ExecStart=/opt/turnero/TurneroApp/Turnero
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGINT
+SyslogIdentifier=turnero
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=http://localhost:5000
+Environment=DOTNET_PRINT_TELEMETRY_MESSAGE=false
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start the service for the first time:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable turnero
+sudo systemctl start turnero
+sudo systemctl status turnero
+```
+
+<Tip>
+  Because the binary is published as `--self-contained -r linux-x64`, the server does not need the .NET runtime installed. The `Turnero` executable in `TurneroApp/` includes the runtime directly. The only runtime dependency is the native C library (glibc), which is present on any modern Ubuntu or Debian server.
+</Tip>
+
+## Reverse Proxy with Nginx (Recommended)
+
+The systemd service binds to `http://localhost:5000` by default. For production you should front it with Nginx to handle TLS termination and serve static assets. A minimal virtual host configuration:
+
+```nginx
+server {
+    listen 80;
+    server_name yourdomain.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name yourdomain.com;
+
+    ssl_certificate     /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
+
+    location / {
+        proxy_pass         http://localhost:5000;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade $http_upgrade;
+        proxy_set_header   Connection keep-alive;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+The `Upgrade` and `Connection` headers are required for SignalR WebSocket connections to pass through Nginx correctly.

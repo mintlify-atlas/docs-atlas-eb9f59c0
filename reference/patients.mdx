@@ -1,0 +1,218 @@
+---
+title: "Patients Controller: Patient Management Endpoints"
+sidebarTitle: "Patients"
+description: "Reference for all PatientsController endpoints — patient CRUD, DataTables search, and patient detail retrieval. Requires Medico role."
+---
+
+The `PatientsController` manages the patient registry in Turnero. It provides a searchable, paginated list view backed by a DataTables server-side data feed, full create and update operations for patient records, and a detail page that surfaces the patient's personal data together with parents/guardian information. Every action in this controller requires the `Medico` role — patient records are considered clinical information and are not accessible to reception (`Ingreso`) or administrative (`Admin`) staff.
+
+The `Patient` model extends `BaseEntity` (which contributes an auto-generated `Guid` primary key) and carries demographic fields, blood type, contact information, and a foreign-key collection linking the patient to all other medical history sub-records (visits, allergies, vaccines, etc.).
+
+## Endpoint summary
+
+| Method | Path | Roles | Description |
+|--------|------|-------|-------------|
+| `GET` | `/Patients/Index` | Medico | Patient list page |
+| `POST` | `/Patients/InitializePatients` | Medico | DataTables server-side data feed |
+| `GET` | `/Patients/Create` | Medico | Returns `_Create` partial view |
+| `POST` | `/Patients/Create` | Medico | Inserts a new patient |
+| `GET` | `/Patients/Edit/{id}` | Medico | Returns `_Edit` partial view |
+| `PUT` | `/Patients/Edit` | Medico | Updates an existing patient |
+| `GET` | `/Patients/Details/{id}` | Medico | Patient detail view |
+
+---
+
+## GET /Patients/Index
+
+Renders the patient list page. The controller calls `getPatient.GetPatients()` on load (result is unused server-side; the actual data is delivered via `InitializePatients`). The view loads a DataTables-powered table that calls `POST /Patients/InitializePatients` for its rows.
+
+**Required roles:** `Medico`
+
+**Response:** HTML view `Index`
+
+---
+
+## POST /Patients/InitializePatients
+
+Server-side DataTables endpoint for the patient list. The search term read from `Columns[1][search][value]` is passed directly to the `SearchPatients` service method, which queries the database for matching records by name or DNI. The result set is then sorted and paginated before being serialised to JSON.
+
+**Required roles:** `Medico`
+
+**Request** — `application/x-www-form-urlencoded`
+
+<ParamField body="draw" type="string" required>
+  DataTables draw counter echoed back verbatim in the response.
+</ParamField>
+
+<ParamField body="start" type="integer" required>
+  Zero-based offset for pagination.
+</ParamField>
+
+<ParamField body="length" type="integer" required>
+  Page size. Pass `0` or omit to receive all records.
+</ParamField>
+
+<ParamField body="Columns[1][search][value]" type="string">
+  Free-text search term applied against patient name and DNI. An empty string returns all patients.
+</ParamField>
+
+<ParamField body="order[0][column]" type="integer">
+  Index of the column to sort by.
+</ParamField>
+
+<ParamField body="order[0][dir]" type="string">
+  Sort direction: `asc` or `desc`.
+</ParamField>
+
+**Response** — `200 OK`, `application/json`
+
+```json
+{
+  "draw": "2",
+  "recordsFiltered": 3,
+  "recordsTotal": 3,
+  "data": [
+    {
+      "id": "c1d2e3f4-0000-1111-2222-333344445555",
+      "name": "Juan Pérez",
+      "dni": 28456789,
+      "birthDate": "15/03/1990",
+      "socialWork": "Swiss Medical",
+      "affiliateNumber": "SM-00123456"
+    }
+  ]
+}
+```
+
+**Response fields**
+
+<ResponseField name="draw" type="string">
+  Echo of the request's draw counter.
+</ResponseField>
+
+<ResponseField name="recordsFiltered" type="integer">
+  Total number of records after applying the search filter (equals `recordsTotal` since filtering happens at the service layer).
+</ResponseField>
+
+<ResponseField name="recordsTotal" type="integer">
+  Total number of records in the result set before pagination.
+</ResponseField>
+
+<ResponseField name="data" type="PatientDTO[]">
+  The page of patient records. Each entry contains `id`, `name`, `dni`, `birthDate`, `socialWork`, and `affiliateNumber`.
+</ResponseField>
+
+---
+
+## GET /Patients/Create
+
+Returns the `_Create` partial view. The `BloodType` enum values are projected into a `SelectListItem` list using their `Display` attribute name (e.g. `"A+"`, `"O-"`) and bound to `ViewBag.Bloodtype` for the blood group dropdown.
+
+**Required roles:** `Medico`
+
+**Response:** Partial view `_Create`
+
+---
+
+## POST /Patients/Create
+
+Inserts a new patient record. Model validation is checked before any database write; a bad request is returned immediately if `ModelState` is invalid.
+
+**Required roles:** `Medico`
+
+**Request** — `application/x-www-form-urlencoded` or `application/json`
+
+<ParamField body="Name" type="string" required>
+  Patient's full name. Maximum display label: `"Nombre"`.
+</ParamField>
+
+<ParamField body="Dni" type="string" required>
+  National identity number (DNI). Must be between 6 and 10 characters.
+</ParamField>
+
+<ParamField body="BirthDate" type="string (date)" required>
+  Date of birth. Formatted as `dd/MM/yyyy` for display; stored as `DateTime`.
+</ParamField>
+
+<ParamField body="SocialWork" type="string">
+  Health insurance / obra social name.
+</ParamField>
+
+<ParamField body="AffiliateNumber" type="string">
+  Insurance affiliate number.
+</ParamField>
+
+<ParamField body="BloodType" type="integer">
+  Integer value of the `BloodType` enum: `0` = A+, `1` = A-, `2` = B+, `3` = B-, `4` = AB+, `5` = AB-, `6` = O+, `7` = O-.
+</ParamField>
+
+<ParamField body="ContactInfo" type="object">
+  Nested contact details object (`ContactInfo` entity). Fields depend on the `ContactInfo` model's own properties.
+</ParamField>
+
+**Responses**
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Patient created successfully. |
+| `400 Bad Request` | `ModelState` validation failed. |
+| `409 Conflict` | An exception was thrown during insertion (e.g. duplicate DNI constraint). |
+
+---
+
+## GET /Patients/Edit/{id}
+
+Returns the `_Edit` partial view pre-populated with the specified patient's data. The `BloodType` dropdown list is rebuilt the same way as for the Create form. Returns `404 Not Found` when the patient does not exist.
+
+**Required roles:** `Medico`
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Patient.Id` to edit.
+</ParamField>
+
+**Response:** Partial view `_Edit` with the `Patient` model, or `404 Not Found`.
+
+---
+
+## PUT /Patients/Edit
+
+Persists changes to an existing patient record. This action requires a valid anti-forgery token (`[ValidateAntiForgeryToken]`), which the partial view embed injects automatically.
+
+**Required roles:** `Medico`
+
+**Request body** — same fields as `POST /Patients/Create`, plus `Id` (required).
+
+<ParamField body="Id" type="string (GUID)" required>
+  The `Patient.Id` (base-class `BaseEntity.Id`) to update.
+</ParamField>
+
+**Responses**
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Patient updated successfully. |
+| `400 Bad Request` | `ModelState` validation failed. |
+| `409 Conflict` | An exception was thrown during update. |
+
+---
+
+## GET /Patients/Details/{id}
+
+Returns the full patient detail view. The controller loads both the `Patient` entity and the associated `ParentsData` record (guardian information) in parallel, placing the latter in `ViewBag.ParentsData`. It also calculates a human-friendly age string from the patient's `BirthDate` (e.g. `"3 años"`, `"8 meses"`, `"2 semanas"`) and exposes it as `ViewBag.Age`.
+
+The response is never cached — the action is decorated with `[ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]` to ensure the page always reflects the latest database state.
+
+**Required roles:** `Medico`
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Patient.Id` to display.
+</ParamField>
+
+**Response:** HTML view `Details` with the `Patient` model, or `404 Not Found`.
+
+**ViewBag values set:**
+
+| Key | Type | Content |
+|-----|------|---------|
+| `ParentsData` | `ParentsData` | Guardian/parent record for the patient, if one exists. |
+| `Age` | `string` | Computed age string (e.g. `"5 años"`, `"4 meses"`, `"12 días"`). |

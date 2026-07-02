@@ -1,0 +1,149 @@
+---
+title: "Configure PostgreSQL Database for Turnero"
+sidebarTitle: "Database"
+description: "Connect Turnero to a PostgreSQL database using the LocalConnection string, apply Entity Framework Core migrations, and manage schema updates."
+---
+
+Turnero persists all clinic data — appointments, patients, doctors, visit histories, and identity records — in a PostgreSQL database. The data-access layer lives in the `Turnero.DAL` project and uses **Npgsql** as the ADO.NET driver together with **Entity Framework Core** for schema management and query generation. The single connection string key `LocalConnection` is the only value you must supply before the application can start.
+
+## Connection String
+
+Turnero reads the connection string at startup with:
+
+```csharp
+AppSettings.ConnectionString = builder.Configuration.GetConnectionString("LocalConnection");
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    options.UseNpgsql(AppSettings.ConnectionString));
+```
+
+The resolved value is also stored in the static `AppSettings.ConnectionString` property so it can be accessed by internal infrastructure code without requiring dependency injection.
+
+The expected Npgsql connection string format is:
+
+```
+Host=<host>;Port=<port>;Database=<dbname>;Username=<user>;Password=<password>
+```
+
+### Development: user secrets (recommended)
+
+Storing credentials in `appsettings.json` risks accidentally committing them to source control. Use the .NET user-secrets store instead:
+
+```bash
+dotnet user-secrets set "ConnectionStrings:LocalConnection" \
+  "Host=localhost;Port=5432;Database=turnero;Username=postgres;Password=yourpassword" \
+  --project Turnero
+```
+
+<Tip>
+  Run the command from the repository root so the `--project` flag correctly resolves to the `Turnero` host project that contains `Program.cs`.
+</Tip>
+
+### Production: appsettings.json
+
+For server deployments, add the key directly to `appsettings.json` on the host. Keep the original file as a backup before editing:
+
+```bash
+cp appsettings.json appsettings.json.bak
+```
+
+Then add or update the connection string section:
+
+```json
+{
+  "ConnectionStrings": {
+    "LocalConnection": "Host=db.example.com;Port=5432;Database=turnero;Username=app;Password=strongpassword"
+  }
+}
+```
+
+<Warning>
+  Do not commit production credentials to your repository. Use environment variables or a secrets manager (e.g. Azure Key Vault, AWS Secrets Manager) for hosted environments.
+</Warning>
+
+## ApplicationDbContext
+
+`ApplicationDbContext` in `Turnero.DAL` inherits from `IdentityDbContext`, which automatically adds all ASP.NET Identity tables alongside the Turnero-specific entity sets:
+
+| DbSet | Table purpose |
+|---|---|
+| `Turns` | Scheduled appointments |
+| `Medics` | Doctor records |
+| `TimeTurns` | Available appointment time slots |
+| `Patients` | Patient demographic records |
+| `ContactInfo` | Patient contact details |
+| `Allergies` | Patient allergy entries |
+| `Visits` | Clinical visit history |
+| `ParentsData` | Parent / guardian information |
+| `PersonalBackground` | Personal medical history |
+| `PerinatalBackground` | Perinatal history |
+| `Vaccines` | Vaccination records |
+| `PermMeds` | Permanent medication records |
+| `GrowthCharts` | Anthropometric growth data |
+| `CongErrors` | Congenital anomaly records |
+
+Column-type overrides are applied in `OnModelCreating` — for example, all `DateTime?` properties on `Allergies` are mapped to the PostgreSQL `date` type, and string properties on `Visit` and `ParentsData` are given empty-string defaults to prevent null surprises.
+
+## Applying Migrations
+
+<Steps>
+  <Step title="Ensure the EF Core tools are installed">
+    ```bash
+    dotnet tool restore
+    # or install globally
+    dotnet tool install --global dotnet-ef
+    ```
+  </Step>
+  <Step title="Apply all pending migrations to the target database">
+    ```bash
+    dotnet ef database update \
+      --project Turnero.DAL \
+      --startup-project Turnero
+    ```
+    This command runs every migration that has not yet been applied, creating tables and applying any schema changes in order.
+  </Step>
+  <Step title="Verify the schema">
+    Connect to the database with `psql` or a GUI tool (e.g. pgAdmin, DBeaver) and confirm that the `Turns`, `Patients`, and `AspNetUsers` tables exist.
+  </Step>
+</Steps>
+
+## Adding New Migrations
+
+When you modify a model class in `Turnero.DAL`, generate a new migration to capture the schema change:
+
+```bash
+dotnet ef migrations add <MigrationName> \
+  --project Turnero.DAL \
+  --startup-project Turnero
+```
+
+Replace `<MigrationName>` with a descriptive Pascal-case name such as `AddPatientBirthDateIndex`. After reviewing the generated files in `Turnero.DAL/Migrations/`, apply them with `database update` as shown above.
+
+<Note>
+  Always review the generated migration file before applying it in production. EF Core cannot always infer whether a column rename should be modelled as a drop-and-add or a true rename, which can result in data loss if not corrected manually.
+</Note>
+
+## Startup Cache Initialization
+
+After the application is built and before it begins serving requests, Turnero pre-warms the `IMemoryCache` with the two most-frequently-read lookup tables:
+
+```csharp
+using (var scope = app.Services.CreateScope())
+{
+    var timeTurnsRepository = scope.ServiceProvider.GetRequiredService<ITimeTurnRepository>();
+    var medicsRepository    = scope.ServiceProvider.GetRequiredService<IMedicRepository>();
+
+    await timeTurnsRepository.GetCachedTimes();
+    await medicsRepository.GetCachedMedics();
+}
+```
+
+The cache is configured with a seven-day expiration scan frequency:
+
+```csharp
+builder.Services.AddMemoryCache(options =>
+{
+    options.ExpirationScanFrequency = TimeSpan.FromDays(7);
+});
+```
+
+This means appointment scheduling pages load immediately without hitting the database for every time-slot or doctor lookup. If you add new `TimeTurn` or `Medic` records at runtime, restart the application (or implement a cache-invalidation call in the relevant write service) to ensure the new entries appear.

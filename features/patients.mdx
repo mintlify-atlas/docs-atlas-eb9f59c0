@@ -1,0 +1,216 @@
+---
+title: "Registering and Managing Clinic Patients"
+sidebarTitle: "Patients"
+description: "Create and manage patient profiles in Turnero, including contact info, insurance details, blood type, and birth date. Accessible to the Medico role."
+---
+
+Patient profiles are the central reference point for all clinical activity in Turnero. Every appointment, clinical visit, allergy record, vaccination, growth measurement, and medication entry is linked back to a single patient. Profiles store demographic information, contact details, insurance data, and blood type, and they serve as the entry point to the full patient history. The entire **Patients** module — including creating, viewing, editing, and searching — requires the **Medico** role.
+
+## The Patient entity
+
+```csharp
+public class Patient : BaseEntity
+{
+    public string?  Name            { get; set; }  // Required
+    public string?  Dni             { get; set; }  // 6–10 characters, required
+    public DateTime BirthDate       { get; set; }  // Required, displayed as dd/MM/yyyy
+    public ContactInfo? ContactInfo { get; set; }
+    public string?  SocialWork      { get; set; }  // Health insurance / Obra Social
+    public string?  AffiliateNumber { get; set; }  // Insurance membership number
+    public BloodType BloodType      { get; set; }  // Enum
+    // Navigation properties
+    public ICollection<Turn>?        Turns               { get; set; }
+    public ICollection<Visit>?       Visits              { get; set; }
+    public ICollection<Vaccines>?    Vaccines            { get; set; }
+    public ICollection<Allergies>?   Allergies           { get; set; }
+    public ICollection<PermMed>?     PermMeds            { get; set; }
+    public ICollection<GrowthChart>? GrowthCharts        { get; set; }
+    public ParentsData?              Parent              { get; set; }
+    public PersonalBackground?       PersonalBackground  { get; set; }
+    public PerinatalBackground?      PerinatalBackground { get; set; }
+    public CongErrors?               CongErrors          { get; set; }
+}
+```
+
+### Field reference
+
+| Field | Type | Validation | Description |
+|---|---|---|---|
+| `Id` | `Guid` | Auto-generated | Primary key (from `BaseEntity`) |
+| `Name` | `string` | Required | Patient's full name |
+| `Dni` | `string` | 6–10 chars, required | National identity document number |
+| `BirthDate` | `DateTime` | Required | Date of birth (`dd/MM/yyyy` display format) |
+| `SocialWork` | `string` | — | Health insurance plan name |
+| `AffiliateNumber` | `string` | — | Insurance membership / affiliate number |
+| `BloodType` | `BloodType` | Enum | ABO + Rh blood group |
+| `ContactInfo` | `ContactInfo` | — | Owned object with phone, email, address |
+
+### BloodType enum
+
+The `BloodType` enum covers all eight standard ABO/Rh combinations. The `[Display]` attribute drives the dropdown labels in the UI.
+
+| Enum value | Display label |
+|---|---|
+| `A_Positive` | A+ |
+| `A_Negative` | A- |
+| `B_Positive` | B+ |
+| `B_Negative` | B- |
+| `AB_Positive` | AB+ |
+| `AB_Negative` | AB- |
+| `O_Positive` | O+ |
+| `O_Negative` | O- |
+
+### ContactInfo sub-object
+
+`ContactInfo` is a separate owned entity linked one-to-one with a patient. It carries all contact details:
+
+| Field | Type | Description |
+|---|---|---|
+| `Id` | `Guid` | Auto-generated primary key |
+| `Phone` | `string` | Telephone number |
+| `Email` | `string` | Email address |
+| `Address` | `string` | Street address |
+| `City` | `string` | City |
+| `PostalCode` | `string` | Postal / ZIP code |
+
+## Role restriction
+
+<Note>
+  The entire `PatientsController` is decorated with `[Authorize(Roles = RolesConstants.Medico)]`. Only authenticated users assigned the **Medico** role can access any patient management endpoint. Front-desk (**Ingreso**) and unauthenticated users will receive a 403 response.
+</Note>
+
+## Patient list
+
+The patient index (`GET /Patients`) displays a DataTables grid. Data is loaded via an AJAX initialization call:
+
+```http
+POST /Patients/InitializePatients
+Content-Type: application/x-www-form-urlencoded
+
+draw=1&start=0&length=25&Columns[1][search][value]=García
+```
+
+The `Columns[1][search][value]` parameter drives a server-side search against patient name and DNI. The response follows the standard DataTables envelope:
+
+```json
+{
+  "draw": 1,
+  "recordsFiltered": 3,
+  "recordsTotal": 3,
+  "data": [
+    {
+      "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      "name": "María García",
+      "dni": 28471032,
+      "birthDate": "15/04/1990",
+      "socialWork": "OSDE",
+      "affiliateNumber": "A-00123456"
+    }
+  ]
+}
+```
+
+## Creating a patient
+
+Open the creation form:
+
+```http
+GET /Patients/Create
+```
+
+This returns the `_Create` partial view with a pre-populated `BloodType` dropdown built from the enum's display names. Submit the form:
+
+```http
+POST /Patients/Create
+Content-Type: application/x-www-form-urlencoded
+
+Name=María+García&Dni=28471032&BirthDate=1990-04-15
+&SocialWork=OSDE&AffiliateNumber=A-00123456&BloodType=0
+```
+
+`BloodType` is submitted as the integer value of the enum member (e.g. `0` → `A_Positive`). Returns `200 OK` on success, `400 Bad Request` if the model state is invalid, or `409 Conflict` on a data layer exception.
+
+## Editing a patient
+
+Load the edit form with the current values pre-filled:
+
+```http
+GET /Patients/Edit/{id}
+```
+
+Submit the updated record:
+
+```http
+PUT /Patients/Edit
+Content-Type: application/x-www-form-urlencoded
+
+Id=3fa85f64-...&Name=María+García&Dni=28471032&BirthDate=1990-04-15
+&SocialWork=Swiss+Medical&AffiliateNumber=B-00987654&BloodType=0
+```
+
+Requires the anti-forgery token header (`__RequestVerificationToken`).
+
+## Patient detail view
+
+```http
+GET /Patients/Details/{id}
+```
+
+The detail page loads the patient record and enriches the view with two additional pieces of data:
+
+- **`ViewBag.ParentsData`** — the linked `ParentsData` record (father's name, blood type, occupation; mother's name, blood type, occupation; number of siblings).
+- **`ViewBag.Age`** — a human-readable age string calculated at request time.
+
+### Age calculation logic
+
+The `CalcularEdad` helper converts `BirthDate` to a display string using the smallest meaningful unit:
+
+| Condition | Returned string |
+|---|---|
+| ≥ 1 year | `"N año(s)"` — e.g. `"3 años"` |
+| ≥ 1 month (< 1 year) | `"N mes(es)"` — e.g. `"8 meses"` |
+| ≥ 7 days (< 1 month) | `"N semana(s)"` — e.g. `"2 semanas"` |
+| < 7 days | `"N día(s)"` — e.g. `"5 días"` |
+
+The calculation uses exact calendar arithmetic: years are resolved by `AddYears`, months by `AddMonths`, and weeks/days by a simple `TimeSpan.Days` difference, each stepped back by one if the addition overshoots today's date.
+
+<Tip>
+  The detail view is the starting point for navigating to all clinical sub-modules (visits, allergies, vaccines, growth charts, permanent medications, and background histories). Each is rendered as a lazy-loaded DataTables panel within the same page.
+</Tip>
+
+## Relationships to other modules
+
+A `Patient` is the parent record for the following clinical entities:
+
+<CardGroup cols={2}>
+  <Card title="Appointments (Turns)" icon="calendar">
+    Zero or more `Turn` records, each representing a scheduled or walk-in visit.
+  </Card>
+  <Card title="Clinical Visits" icon="notes-medical">
+    Zero or more `Visit` records documenting diagnoses, treatments, and evolution notes.
+  </Card>
+  <Card title="Allergies" icon="triangle-exclamation">
+    A list of `Allergies` entries with severity, type, and occurrence frequency.
+  </Card>
+  <Card title="Vaccines" icon="syringe">
+    A collection of `Vaccines` records with the vaccine name and date applied.
+  </Card>
+  <Card title="Growth Charts" icon="chart-line">
+    Longitudinal `GrowthChart` entries tracking weight, height, head circumference, and BMI.
+  </Card>
+  <Card title="Permanent Medications" icon="pills">
+    A list of `PermMed` entries for chronic or ongoing prescriptions.
+  </Card>
+  <Card title="Personal Background" icon="clipboard-list">
+    A single `PersonalBackground` record with boolean flags for common medical history items.
+  </Card>
+  <Card title="Perinatal Background" icon="baby">
+    A single `PerinatalBackground` record with birth measurements and gestational data.
+  </Card>
+  <Card title="Parents Data" icon="people-group">
+    A single `ParentsData` record with father's and mother's name, blood type, and occupation.
+  </Card>
+  <Card title="Congenital Errors" icon="dna">
+    A single `CongErrors` record with neonatal screening results for metabolic conditions.
+  </Card>
+</CardGroup>

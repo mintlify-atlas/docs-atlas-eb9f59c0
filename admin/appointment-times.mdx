@@ -1,0 +1,150 @@
+---
+title: "Configuring Appointment Time Slots"
+sidebarTitle: "Time Slots"
+description: "Define the time slots available for appointment scheduling in Turnero. Admins create and delete TimeTurn records that appear in the appointment booking dropdown."
+---
+
+Before any appointments can be booked, an administrator must define the available time slots for the clinic's schedule. Each time slot is stored as a `TimeTurn` record and appears in the dropdown that staff and patients use when creating or editing an appointment. There is no hard-coded schedule — every option the booking form offers comes directly from the `TimeTurn` table, so the system is fully flexible around your clinic's operating hours.
+
+## The TimeTurn Model
+
+```csharp
+public class TimeTurn
+{
+    public Guid                 Id    { get; set; }
+    public string?              Time  { get; set; }
+    public ICollection<Turn>?   Turns { get; set; }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `Id` | `Guid` | Auto-generated primary key |
+| `Time` | `string` | The display value shown in the booking dropdown (e.g. `"08:00"`) |
+| `Turns` | Navigation | All appointments that reference this time slot |
+
+---
+
+## How Time Slots Are Used
+
+When a user opens the appointment create or edit form, the controller calls `getTimeTurns.GetCachedTimes()` to retrieve the full list of `TimeTurn` records from memory and populates a dropdown with each record's `Time` string. The selected `TimeTurn.Id` is stored on the appointment (`Turn`) as a foreign key (`TimeId`). This means every appointment is permanently linked to a specific `TimeTurn` record — deleting the record later does not remove the appointment, but it does leave that `TimeId` pointing to a row that no longer exists.
+
+---
+
+## Caching
+
+Time slot records are loaded from the database once at application startup and held in memory under the cache key `"timeTurns"`. All subsequent requests for the time slot list read from this cache rather than querying the database.
+
+```csharp
+// Program.cs — cache warm-up at startup
+await timeTurnsRepository.GetCachedTimes();
+```
+
+<Note>
+  Because the list is cached at startup, newly created time slots will not appear in the appointment booking dropdown until the application is restarted. Plan your time slot configuration before going live, or restart the app after making changes.
+</Note>
+
+---
+
+## Creating a Time Slot
+
+<Steps>
+  <Step title="Open the Create form">
+    Navigate to **GET `/TimeTurn/Create`**. A blank form is displayed with an `Id` (Guid) field and a `Time` text field.
+  </Step>
+  <Step title="Enter the time value">
+    Type the time string into the **Time** field. Use 24-hour `HH:mm` format for consistency across the schedule (e.g. `"08:00"`, `"08:30"`, `"14:00"`). The value is stored and displayed exactly as entered — there is no automatic formatting.
+  </Step>
+  <Step title="Save the time slot">
+    Submit the form to **POST `/TimeTurn/Create`**. The controller binds only the `Id` and `Time` fields:
+
+    ```csharp
+    public async Task<IActionResult> Create([Bind("Id,Time")] TimeTurn timeTurnViewModel)
+    {
+        if (ModelState.IsValid)
+        {
+            await insertTimeTurn.Create(timeTurnViewModel);
+            return RedirectToAction(nameof(Index));
+        }
+        return View(timeTurnViewModel);
+    }
+    ```
+
+    On success the user is redirected to `/TimeTurn/Index`.
+  </Step>
+</Steps>
+
+<Tip>
+  Use consistent `HH:mm` formatting for all time slots. Mixed formats such as `"8:00"`, `"08:00 AM"`, and `"8 am"` will all display correctly as strings but will sort unpredictably in the dropdown.
+</Tip>
+
+---
+
+## Deleting a Time Slot
+
+<Steps>
+  <Step title="Open the confirmation page">
+    Navigate to **GET `/TimeTurn/Delete/{id}`**. The controller loads the record with `getTimeTurns.GetTimeTurn(id)` and displays it for review. A `404 Not Found` response is returned if the ID does not exist.
+  </Step>
+  <Step title="Confirm the deletion">
+    Submit the confirmation to **POST `/TimeTurn/Delete`** (action name `Delete`, mapped internally to `DeleteConfirmed`). The controller calls `deleteTimeTurn.Delete(timeTurnViewModel)` and redirects to the index.
+
+    ```csharp
+    [HttpPost, ActionName("Delete")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> DeleteConfirmed(Guid id)
+    {
+        var timeTurnViewModel = await getTimeTurns.GetTimeTurn(id);
+        deleteTimeTurn.Delete(timeTurnViewModel);
+        return RedirectToAction(nameof(Index));
+    }
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Deleting a `TimeTurn` record that is referenced by existing appointments will leave those appointments with an orphaned `TimeId` foreign key. The appointments themselves are **not** deleted automatically. Before removing a time slot, search for appointments using that slot and update or delete them first.
+</Warning>
+
+---
+
+## Example Time Slot Configuration
+
+The table below shows a typical morning/afternoon schedule for a clinic with 30-minute appointments:
+
+| Time | Period |
+|---|---|
+| `08:00` | Morning |
+| `08:30` | Morning |
+| `09:00` | Morning |
+| `09:30` | Morning |
+| `10:00` | Morning |
+| `10:30` | Morning |
+| `11:00` | Morning |
+| `11:30` | Morning |
+| `14:00` | Afternoon |
+| `14:30` | Afternoon |
+| `15:00` | Afternoon |
+| `15:30` | Afternoon |
+| `16:00` | Afternoon |
+| `16:30` | Afternoon |
+| `17:00` | Afternoon |
+| `17:30` | Afternoon |
+
+Enter each row as a separate `TimeTurn` record via `/TimeTurn/Create`, then restart the application to warm the cache.
+
+---
+
+## All Time Slot Routes at a Glance
+
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/TimeTurn/Index` | List all configured time slots |
+| `GET` | `/TimeTurn/Create` | Show the create form |
+| `POST` | `/TimeTurn/Create` | Save a new time slot (binds `Id`, `Time`) |
+| `GET` | `/TimeTurn/Delete/{id}` | Show the deletion confirmation page |
+| `POST` | `/TimeTurn/Delete` | Confirm and delete the time slot |
+
+<Note>
+  All routes under `/TimeTurn/` require the `Admin` role. Reception staff (`Ingreso`) and doctors (`Medico`) can use time slots in the booking form but cannot create or delete them.
+</Note>

@@ -1,0 +1,230 @@
+---
+title: "Scheduling and Managing Patient Appointments"
+sidebarTitle: "Appointments"
+description: "Book, filter, edit, and track daily patient appointments in Turnero. Supports real-time updates, public walk-in booking, Excel and PDF export."
+---
+
+Appointments — referred to as **turnos** throughout the codebase — are the operational heartbeat of Turnero. Every scheduled slot is backed by a `Turn` entity that records who the patient is, which doctor they are seeing, when and at what time, their insurance coverage, and whether they have physically arrived at the clinic. Staff with the **Ingreso** role handle the front desk (booking, editing, deleting), while doctors holding the **Medico** role can view their own schedule and mark patients as arrived. Deletions can be performed by **Admin** or **Ingreso** users.
+
+## The Turn entity
+
+Each appointment maps to a `Turn` record in the database. The table below lists every field, its type, and what it represents.
+
+| Field | Type | Description |
+|---|---|---|
+| `Id` | `Guid` | Auto-generated primary key |
+| `Name` | `string` | Full name of the patient |
+| `Dni` | `long` | National identity document number |
+| `MedicId` | `Guid` | Foreign key to the assigned `Medic` |
+| `DateTurn` | `DateTime` | Calendar date of the appointment (displayed as `dd/MM/yyyy`) |
+| `TimeId` | `Guid` | Foreign key to the `TimeTurn` time slot |
+| `SocialWork` | `string` | Health insurance / social work name (*Obra Social*) |
+| `Reason` | `string` | Patient-provided reason for the visit |
+| `Accessed` | `bool` | `true` once the patient has been marked as arrived |
+
+<Note>
+  The `TurnDTO` projection adds `MedicName` (the doctor's display name), a pre-formatted `Date` string (`dd/MM/yyyy`), a pre-formatted `Time` string, and an `IsMedic` flag that the front-end uses to decide which actions to surface per row.
+</Note>
+
+## Role-based access
+
+<CardGroup cols={3}>
+  <Card title="Ingreso" icon="ticket">
+    Create, view, edit, and delete appointments. Cannot mark a patient as arrived.
+  </Card>
+  <Card title="Medico" icon="stethoscope">
+    Create and view appointments for their own schedule. Mark patients as arrived. Cannot edit or delete turns.
+  </Card>
+  <Card title="Admin" icon="shield">
+    Delete appointments. Combined with Ingreso privileges when both roles are assigned.
+  </Card>
+</CardGroup>
+
+## Appointment list and filtering
+
+The main appointments screen (`GET /Turns`) renders a DataTables-powered grid. The table is populated by an AJAX call to the initialization endpoint.
+
+```http
+POST /Turns/InitializeTurns
+Content-Type: application/x-www-form-urlencoded
+
+draw=1&start=0&length=25&Columns[5][search][value]=<MedicId>&Columns[6][search][value]=2025-06-15
+```
+
+The server resolves the requesting user's identity. If the user is a **Medico**, `MedicId` is locked to their own profile and cannot be overridden by the form value. If the user is **Ingreso**, they can filter by any doctor. The `dateTurn` parameter defaults to today if omitted or unparseable.
+
+The response envelope follows the DataTables protocol:
+
+```json
+{
+  "draw": 1,
+  "recordsFiltered": 12,
+  "recordsTotal": 12,
+  "data": [
+    {
+      "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      "name": "María García",
+      "dni": 28471032,
+      "medicId": "a1b2c3d4-...",
+      "medicName": "Dr. Rodríguez",
+      "date": "15/06/2025",
+      "time": "09:30",
+      "socialWork": "OSDE",
+      "reason": "Control anual",
+      "accessed": false,
+      "isMedic": false
+    }
+  ]
+}
+```
+
+## Creating an appointment
+
+Authenticated **Ingreso** or **Medico** users open the creation form via `GET /Turns/Create`, which returns the `_Create` partial view pre-loaded with doctor and time-slot dropdowns sourced from an in-memory cache.
+
+```http
+POST /Turns/Create
+Content-Type: application/x-www-form-urlencoded
+
+Name=María+García&Dni=28471032&MedicId=a1b2c3d4-...&Date=15-06-2025
+&TimeId=78496444-276d-4389-8b2f-f668c5350e3f&SocialWork=OSDE&Reason=Control+anual
+```
+
+**Required fields:** `Name`, `Dni`, `MedicId`, `Date`, `TimeId`.  
+**Optional fields:** `SocialWork`, `Reason` (trailing quotes are stripped automatically).
+
+On success the server emits a SignalR message to the assigned doctor notifying them that a new appointment has been added to their schedule (see [Real-time updates](#real-time-updates)).
+
+<Tip>
+  You can pre-check whether a time slot is already taken before submitting the form:
+
+  ```http
+  POST /Turns/CheckTurn
+  Content-Type: application/x-www-form-urlencoded
+
+  medicId=a1b2c3d4-...&date=2025-06-15&timeTurn=78496444-...
+  ```
+
+  Returns `true` if the slot is occupied, `false` if it is free.
+</Tip>
+
+## Editing an appointment
+
+Only **Ingreso** users can edit existing turns. The edit form is loaded as a partial view:
+
+```http
+GET /Turns/Edit/{id}
+```
+
+The form pre-selects the current doctor and time slot. Submit changes with:
+
+```http
+PUT /Turns/Edit
+Content-Type: application/x-www-form-urlencoded
+
+Id=3fa85f64-...&Name=María+García&Dni=28471032&MedicId=a1b2c3d4-...
+&Date=15-06-2025&TimeId=78496444-...&SocialWork=OSDE&Reason=Control+anual
+```
+
+On success, every connected **Ingreso** user receives a SignalR push to refresh their table.
+
+## Marking a patient as arrived
+
+Only users in the **Medico** role can mark a turn as accessed. This toggles the `Accessed` flag on the `Turn` record:
+
+```http
+POST /Turns/Accessed/{id}
+```
+
+Where `{id}` is the turn's `Guid`. On success, every connected **Ingreso** user is notified via SignalR so the front-desk table reflects the updated arrival status in real time.
+
+## Deleting an appointment
+
+**Admin** and **Ingreso** users may delete a turn:
+
+```http
+DELETE /Turns/Delete/{id}
+```
+
+Deletion broadcasts a global `UpdateTable` SignalR event so all connected users see the row disappear without a manual page refresh.
+
+## Real-time updates
+
+Turnero uses ASP.NET Core SignalR to push table changes to connected browsers. The hub is mounted at `/TurnsTableHub`.
+
+```csharp
+// Hub definition
+public class TurnsTableHub : Hub
+{
+    // Notify a specific user (e.g. the assigned doctor)
+    public async Task UpdateTableDirected(string user, string message, string date)
+        => await Clients.User(user).SendAsync(message, date);
+
+    // Broadcast to all connected clients (e.g. after a deletion)
+    public async Task UpdateTable(string message)
+        => await Clients.All.SendAsync(message);
+}
+```
+
+| Trigger | SignalR method | Recipients |
+|---|---|---|
+| Turn created | `UpdateTableDirected` | The assigned doctor only |
+| Turn edited | `UpdateTableDirected` | All **Ingreso** users |
+| Patient arrived (`Accessed`) | `UpdateTableDirected` | All **Ingreso** users |
+| Turn deleted | `UpdateTable` | All connected clients |
+
+## Public walk-in booking
+
+Anonymous users — for example patients who arrive without a prior appointment — can book a same-day slot through the public booking form at `/TurnsPublic`. No authentication is required.
+
+```http
+GET /TurnsPublic       # Loads the walk-in form with doctor/time dropdowns
+POST /TurnsPublic/Create
+Content-Type: application/x-www-form-urlencoded
+
+Name=Juan+Pérez&Dni=33876521&MedicId=a1b2c3d4-...
+```
+
+The server automatically fills in the following values regardless of what the client submits:
+
+| Field | Value set by server |
+|---|---|
+| `Date` | Today (`DateTime.Today`) |
+| `Reason` | `"Turno espontáneo"` |
+| `TimeId` | `78496444-276d-4389-8b2f-f668c5350e3f` (the default walk-in slot) |
+
+The assigned doctor receives a SignalR notification identical to a regular booking.
+
+<Note>
+  The public endpoint is decorated with `[AllowAnonymous]` and does not enforce CSRF validation, making it suitable for an unattended kiosk or a waiting-room tablet.
+</Note>
+
+## Exporting appointments
+
+The currently filtered view can be exported in two formats. Both endpoints apply the same doctor/date filters that are active in the DataTables session and sort rows by time of appointment.
+
+### Excel export
+
+```http
+POST /Turns/ExportExcel
+```
+
+Returns `turnos.xlsx` (`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`). The workbook contains a single sheet named **Turnos** with the following columns:
+
+| Column | Source field | Format |
+|---|---|---|
+| Nombre | `Name` | text |
+| DNI | `Dni` | text |
+| Obra Social | `SocialWork` | text |
+| Motivo | `Reason` | text |
+| Médico | `MedicName` | text |
+| Fecha | `Date` | `dd/MM/yyyy` |
+| Hora | `Time` | `HH:mm` |
+
+### PDF export
+
+```http
+POST /Turns/ExportPdf
+```
+
+Returns `turnos.pdf` (`application/pdf`) generated with QuestPDF. The document includes a bold header reading **"Turnos del día"** and a five-column table: Nombre, DNI, Obra (Social), Médico, and Hora.

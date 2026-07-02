@@ -1,0 +1,831 @@
+---
+title: "Medical History Controllers: Visits, Allergies, Vaccines, and More"
+sidebarTitle: "Medical History"
+description: "Reference for VisitsController, AllergiesController, VaccinesController, GrowthChartController, PermMedController, PersonalBackgroundController, and PerinatalBackgroundController endpoints."
+---
+
+Turnero organises a patient's clinical history across seven specialised controllers, each responsible for a distinct category of medical data. Every controller in this group requires the `Medico` role. All list endpoints follow the same DataTables server-side pattern: a `GET` action renders a partial view containing an empty `<table>` placeholder, and a companion `POST` initialisation endpoint provides the JSON data feed. Create and edit forms are delivered as partial views embedded inside the patient detail page, keeping the UI entirely Ajax-driven without full page reloads.
+
+The `patientId` parameter accepted by the DataTables initialisation endpoints is resolved flexibly: the server checks (in priority order) a querystring parameter, a form field named `patientId` or `patientid`, a form column-search value ending in `[search][value]`, any GUID-shaped form value, and — for JSON content types — a JSON body property. This resilience means the endpoints work regardless of how DataTables serialises the extra search parameter.
+
+---
+
+## Visits
+
+`VisitsController` manages consultation records. Each `Visit` captures the date, reason, diagnosis, diagnosis description, treatment, evolution notes, laboratory results, other studies, and free-form observations. The creating doctor's ID is automatically resolved from the authenticated user's claims — the client never sends `MedicId`.
+
+### Endpoint summary
+
+| Method | Path | Roles | Description |
+|--------|------|-------|-------------|
+| `GET` | `/Visits/Index/{id}` | Medico | Returns `_VisitsTable` partial for a patient |
+| `POST` | `/Visits/InitializeVisits` | Medico | DataTables data feed for a patient's visits |
+| `GET` | `/Visits/Create/{id}` | Medico | Returns `_CreateVisit` partial |
+| `POST` | `/Visits/Create` | Medico | Inserts a new visit |
+| `GET` | `/Visits/Details/{id}` | Medico | Returns `_Details` partial for a visit |
+
+---
+
+### GET /Visits/Index/{id}
+
+Returns the `_VisitsTable` partial view. Sets `ViewData["PatientId"]` so the embedded DataTables script knows which patient to filter on.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Patient.Id` whose visit history to display.
+</ParamField>
+
+**Response:** Partial view `_VisitsTable`, or `400 Bad Request` when `id` is empty.
+
+---
+
+### POST /Visits/InitializeVisits
+
+DataTables server-side feed for a patient's visits. Accepts `patientId` through multiple resolution strategies (see introduction above). Returns `VisitDTO` records sorted and paginated according to the DataTables request.
+
+**Request** — `application/x-www-form-urlencoded`
+
+<ParamField body="patientId" type="string (GUID)" required>
+  The patient whose visits to retrieve.
+</ParamField>
+
+<ParamField body="draw" type="string" required>
+  DataTables draw counter.
+</ParamField>
+
+<ParamField body="start" type="integer" required>
+  Pagination offset.
+</ParamField>
+
+<ParamField body="length" type="integer" required>
+  Page size.
+</ParamField>
+
+**Response** — `200 OK`, `application/json`
+
+```json
+{
+  "draw": "1",
+  "recordsFiltered": 5,
+  "recordsTotal": 5,
+  "data": [
+    {
+      "id": "aabbccdd-1234-5678-9abc-def012345678",
+      "visitDate": "10/06/2025",
+      "reason": "Fiebre",
+      "patientId": "c1d2e3f4-0000-1111-2222-333344445555",
+      "medic": "Dr. López"
+    }
+  ]
+}
+```
+
+---
+
+### GET /Visits/Create/{id}
+
+Returns the `_CreateVisit` partial view pre-initialised with a `Visit` model where `PatientId` is set. Also generates and injects a fresh anti-forgery token into `ViewData["RequestVerificationToken"]` so the partial form can submit safely.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Patient.Id` for which to create a visit.
+</ParamField>
+
+**Response:** Partial view `_CreateVisit` with a `Visit` model, or `400 Bad Request` when `id` is empty.
+
+---
+
+### POST /Visits/Create
+
+Inserts a new `Visit`. The `MedicId` is resolved from the authenticated user's identity claims — the controller calls `CheckMedic()` internally and sets `visit.MedicId` before persisting. The client does not submit a medic identifier.
+
+**Required:** `[ValidateAntiForgeryToken]`
+
+**Request** — `application/x-www-form-urlencoded`
+
+<ParamField body="PatientId" type="string (GUID)" required>
+  The patient this visit belongs to. Must not be `Guid.Empty`.
+</ParamField>
+
+<ParamField body="VisitDate" type="string (datetime)" required>
+  Date and time of the visit.
+</ParamField>
+
+<ParamField body="Reason" type="string">
+  Chief complaint or reason for the visit.
+</ParamField>
+
+<ParamField body="Diagnosis" type="string">
+  Diagnosis code or label.
+</ParamField>
+
+<ParamField body="DiagDescription" type="string">
+  Detailed description of the diagnosis.
+</ParamField>
+
+<ParamField body="Treatment" type="string">
+  Treatment plan.
+</ParamField>
+
+<ParamField body="EvolutionNotes" type="string">
+  Clinical evolution notes.
+</ParamField>
+
+<ParamField body="LabResults" type="string">
+  Laboratory result summary.
+</ParamField>
+
+<ParamField body="OtherStudies" type="string">
+  Other diagnostic studies.
+</ParamField>
+
+<ParamField body="Observations" type="string">
+  Free-form observations.
+</ParamField>
+
+**Responses**
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Visit created. |
+| `400 Bad Request` | `PatientId` is empty. |
+| `500 Internal Server Error` | Unexpected error during persistence. |
+
+---
+
+### GET /Visits/Details/{id}
+
+Returns the `_Details` partial view for a single visit, populated with the full `Visit` entity.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Visit.Id` (i.e. `BaseEntity.Id`) to retrieve.
+</ParamField>
+
+**Response:** Partial view `_Details` with the `Visit` model, or `400 Bad Request` when `id` is empty.
+
+---
+
+## Allergies
+
+`AllergiesController` tracks a patient's allergy history. Each `Allergies` record captures the allergen name, begin and optional end date, description, severity (8-level enum from `Ninguna` to `Fatal`), allergy type (`Comida`, `Medicina`, `Ambiental`, `Insecto`, `Otra`), frequency of occurrence (`Una`, `Sporadica`, `Frequente`, `Constante`), and free-form comments.
+
+### Endpoint summary
+
+| Method | Path | Roles | Description |
+|--------|------|-------|-------------|
+| `GET` | `/Allergies/Index/{id}` | Medico | Returns `_AllergiesTable` partial |
+| `POST` | `/Allergies/InitializeAllergies` | Medico | DataTables data feed |
+| `GET` | `/Allergies/Create/{id}` | Medico | Returns `_Create` partial |
+| `POST` | `/Allergies/Create` | Medico | Inserts a new allergy |
+| `GET` | `/Allergies/Edit/{id}` | Medico | Returns `_Create` partial pre-filled for editing |
+| `POST` | `/Allergies/Edit` | Medico | Updates an allergy |
+| `DELETE` | `/Allergies/Delete/{id}` | Medico | Deletes an allergy |
+| `GET` | `/Allergies/Details/{id}` | Medico | Returns `_Details` partial for one allergy |
+
+---
+
+### GET /Allergies/Index/{id}
+
+Returns the `_AllergiesTable` partial and sets `ViewData["PatientId"]`.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Patient.Id` whose allergies to display.
+</ParamField>
+
+---
+
+### POST /Allergies/InitializeAllergies
+
+DataTables feed. Accepts `patientId` via the flexible resolution strategy described in the introduction.
+
+<ParamField body="patientId" type="string (GUID)" required>
+  The patient whose allergies to retrieve.
+</ParamField>
+
+**Response** — `200 OK`, `application/json`
+
+```json
+{
+  "draw": "1",
+  "recordsFiltered": 2,
+  "recordsTotal": 2,
+  "data": [
+    {
+      "id": "ddee1122-abcd-ef01-2345-678901234567",
+      "name": "Penicilina",
+      "patientId": "c1d2e3f4-0000-1111-2222-333344445555",
+      "begin": "2020-01-15",
+      "end": null,
+      "severity": 4,
+      "type": 1,
+      "occurrency": 2,
+      "description": "Urticaria generalizada",
+      "comments": "Verificado en 2022"
+    }
+  ]
+}
+```
+
+---
+
+### GET /Allergies/Create/{id}
+
+Returns the `_Create` partial with a new `Allergies` model where `PatientId` is set. Populates `ViewBag.Occurrency`, `ViewBag.Severity`, and `ViewBag.Type` with enum-based `SelectListItem` lists. Generates an anti-forgery token in `ViewData["RequestVerificationToken"]`.
+
+<ParamField path="id" type="string (GUID)" required>
+  The patient to associate the new allergy with.
+</ParamField>
+
+---
+
+### POST /Allergies/Create
+
+Inserts a new allergy record. Requires a valid anti-forgery token.
+
+**Request** — `application/x-www-form-urlencoded`
+
+<ParamField body="PatientId" type="string (GUID)" required>
+  Must not be `Guid.Empty`.
+</ParamField>
+
+<ParamField body="Name" type="string" required>
+  Allergen name.
+</ParamField>
+
+<ParamField body="Begin" type="string (date)" required>
+  Date the allergy was first identified (`DateOnly`).
+</ParamField>
+
+<ParamField body="End" type="string (date)">
+  Date the allergy resolved, if applicable (`DateOnly`). Nullable.
+</ParamField>
+
+<ParamField body="Description" type="string">
+  Clinical description of the allergic reaction.
+</ParamField>
+
+<ParamField body="Severity" type="integer">
+  `Severity` enum value: `0`=Ninguna, `1`=Minima, `2`=Baja, `3`=Media, `4`=Alta, `5`=Severa, `6`=Critica, `7`=Fatal.
+</ParamField>
+
+<ParamField body="Type" type="integer">
+  `AllergyType` enum value: `0`=Comida, `1`=Medicina, `2`=Ambiental, `3`=Insecto, `4`=Otra.
+</ParamField>
+
+<ParamField body="Occurrency" type="integer">
+  `Occurrency` enum value: `0`=Una, `1`=Sporadica, `2`=Frequente, `3`=Constante.
+</ParamField>
+
+<ParamField body="Comments" type="string">
+  Additional free-text comments.
+</ParamField>
+
+**Responses:** `200 OK`, `400 Bad Request`, or `500 Internal Server Error`.
+
+---
+
+### GET /Allergies/Edit/{id}
+
+Returns the `_Create` partial pre-filled with the existing allergy data for editing. Also refreshes the enum select lists and anti-forgery token.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Allergies.Id` to edit.
+</ParamField>
+
+**Response:** Partial view `_Create` with the existing `Allergies` model, or `404 Not Found`.
+
+---
+
+### POST /Allergies/Edit
+
+Updates an existing allergy. Requires a valid anti-forgery token. The request body shape is identical to `POST /Allergies/Create`.
+
+**Responses:** `200 OK`, `400 Bad Request`, or `500 Internal Server Error`.
+
+---
+
+### DELETE /Allergies/Delete/{id}
+
+Deletes the specified allergy record.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Allergies.Id` to delete.
+</ParamField>
+
+**Response:** `200 OK`
+
+---
+
+### GET /Allergies/Details/{id}
+
+Returns the `_Details` partial view for a single allergy.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Allergies.Id` to display.
+</ParamField>
+
+---
+
+## Vaccines
+
+`VaccinesController` records vaccination events. Each `VaccinesDto` captures the vaccine description (selected from a `VaccinesEnum` list, with spaces substituted for underscores in display), an optional free-text `OtherDescription`, the application date, and the owning patient ID.
+
+### Endpoint summary
+
+| Method | Path | Roles | Description |
+|--------|------|-------|-------------|
+| `GET` | `/Vaccines/Index/{id}` | Medico | Returns `_Table` partial |
+| `POST` | `/Vaccines/InitializeVaccines` | Medico | DataTables data feed |
+| `GET` | `/Vaccines/Create/{id}` | Medico | Returns `_Create` partial |
+| `POST` | `/Vaccines/Create` | Medico | Inserts a vaccine record |
+| `GET` | `/Vaccines/Edit/{id}` | Medico | Returns `_Create` partial for editing |
+| `POST` | `/Vaccines/Edit` | Medico | Updates a vaccine record |
+| `DELETE` | `/Vaccines/Delete/{id}` | Medico | Deletes a vaccine record |
+
+---
+
+### GET /Vaccines/Index/{id}
+
+Fetches all vaccine records for the patient via `get.GetByPatientId` and returns the `_Table` partial view with the data.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Patient.Id`.
+</ParamField>
+
+**Response:** Partial view `_Table` with `IEnumerable<Vaccines>`, or `400 Bad Request`.
+
+---
+
+### POST /Vaccines/InitializeVaccines
+
+DataTables feed for a patient's vaccines.
+
+<ParamField body="patientId" type="string (GUID)" required>
+  The patient whose vaccine records to retrieve.
+</ParamField>
+
+**Response** — `200 OK`, `application/json`
+
+```json
+{
+  "draw": "1",
+  "recordsFiltered": 3,
+  "recordsTotal": 3,
+  "data": [
+    {
+      "id": "aabb1234-0000-aaaa-bbbb-ccccddddeeee",
+      "description": "Triple Viral",
+      "otherDescription": null,
+      "dateApplied": "2024-03-10",
+      "patientId": "c1d2e3f4-0000-1111-2222-333344445555"
+    }
+  ]
+}
+```
+
+---
+
+### GET /Vaccines/Create/{id}
+
+Returns the `_Create` partial with a new `Vaccines` model. Populates `ViewBag.Description` with a `SelectListItem` list built from `VaccinesEnum` names (underscores replaced with spaces). Generates an anti-forgery token.
+
+<ParamField path="id" type="string (GUID)" required>
+  The patient to associate the vaccine with.
+</ParamField>
+
+---
+
+### POST /Vaccines/Create
+
+Inserts a new vaccine record. Accepts `VaccinesDto`. Requires anti-forgery token.
+
+<ParamField body="PatientId" type="string (GUID)" required>
+  Must not be `Guid.Empty`.
+</ParamField>
+
+<ParamField body="Description" type="string">
+  Vaccine name from `VaccinesEnum` (underscores replaced with spaces).
+</ParamField>
+
+<ParamField body="OtherDescription" type="string">
+  Free-text description for vaccines not in the standard list.
+</ParamField>
+
+<ParamField body="DateApplied" type="string (date)">
+  Date the vaccine was administered (`DateOnly`, nullable).
+</ParamField>
+
+**Responses:** `200 OK`, `400 Bad Request`, or `500 Internal Server Error`.
+
+---
+
+### GET /Vaccines/Edit/{id}
+
+Returns the `_Create` partial filled with the existing `Vaccines` record. Anti-forgery token and Description list are regenerated.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Vaccines.Id` to edit.
+</ParamField>
+
+**Response:** Partial view `_Create` with existing data, `400 Bad Request` for empty ID, or `404 Not Found`.
+
+---
+
+### POST /Vaccines/Edit
+
+Updates a vaccine record. Body shape mirrors `POST /Vaccines/Create`; `Id` and `PatientId` must both be non-empty GUIDs. Requires anti-forgery token.
+
+**Responses:** `200 OK`, `400 Bad Request`, or `500 Internal Server Error`.
+
+---
+
+### DELETE /Vaccines/Delete/{id}
+
+Deletes the specified vaccine record.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Vaccines.Id` to delete.
+</ParamField>
+
+**Response:** `200 OK`, `400 Bad Request` for empty ID, or `500 Internal Server Error`.
+
+---
+
+## Growth Chart
+
+`GrowthChartController` records anthropometric measurements over time for a patient. Each `GrowthChart` entry stores the patient's age (decimal years), a time label, weight with percentile, height with percentile, head circumference with percentile, and BMI. All numeric fields have database precision of `(13,3)`.
+
+### Endpoint summary
+
+| Method | Path | Roles | Description |
+|--------|------|-------|-------------|
+| `GET` | `/GrowthChart/Index/{id}` | Medico | Returns `_Table` partial |
+| `POST` | `/GrowthChart/Initialize` | Medico | DataTables data feed |
+| `GET` | `/GrowthChart/Create/{id}` | Medico | Returns `_Create` partial |
+| `POST` | `/GrowthChart/Create` | Medico | Inserts a growth chart entry |
+| `GET` | `/GrowthChart/Edit/{id}` | Medico | Returns `_Create` partial for editing |
+| `POST` | `/GrowthChart/Edit` | Medico | Updates a growth chart entry |
+| `DELETE` | `/GrowthChart/Delete/{id}` | Medico | Deletes a growth chart entry |
+
+---
+
+### GET /GrowthChart/Index/{id}
+
+Fetches all growth chart records for the patient and returns the `_Table` partial.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Patient.Id`.
+</ParamField>
+
+**Response:** Partial view `_Table` with `IEnumerable<GrowthChart>`, or `400 Bad Request`.
+
+---
+
+### POST /GrowthChart/Initialize
+
+DataTables feed for a patient's growth chart records.
+
+<ParamField body="patientId" type="string (GUID)" required>
+  The patient whose growth chart entries to retrieve.
+</ParamField>
+
+**Response** — `200 OK`, `application/json`
+
+```json
+{
+  "draw": "1",
+  "recordsFiltered": 4,
+  "recordsTotal": 4,
+  "data": [
+    {
+      "id": "f0e1d2c3-b4a5-9687-7865-544332211000",
+      "age": 2.500,
+      "time": "30 meses",
+      "weight": 12.500,
+      "wPerc": "50",
+      "height": 90.000,
+      "hPerc": "50",
+      "headCircumference": 49.000,
+      "hcPerc": "50",
+      "bmi": 15.400,
+      "patientId": "c1d2e3f4-0000-1111-2222-333344445555"
+    }
+  ]
+}
+```
+
+---
+
+### GET /GrowthChart/Create/{id}
+
+Returns the `_Create` partial with a new `GrowthChart` model (`PatientId` set). Generates an anti-forgery token.
+
+<ParamField path="id" type="string (GUID)" required>
+  The patient to associate the entry with.
+</ParamField>
+
+---
+
+### POST /GrowthChart/Create
+
+Inserts a new growth chart entry. Requires `[ValidateAntiForgeryToken]` and a valid `ModelState`.
+
+<ParamField body="PatientId" type="string (GUID)" required>
+  Must not be `Guid.Empty`.
+</ParamField>
+
+<ParamField body="Age" type="decimal" required>
+  Patient age in decimal years (precision `6,3`).
+</ParamField>
+
+<ParamField body="Time" type="string">
+  Human-readable age/time label (e.g. `"18 meses"`).
+</ParamField>
+
+<ParamField body="Weight" type="decimal" required>
+  Weight in kilograms (precision `13,3`).
+</ParamField>
+
+<ParamField body="WPerc" type="string">
+  Weight percentile label.
+</ParamField>
+
+<ParamField body="Height" type="decimal" required>
+  Height in centimetres (precision `13,3`).
+</ParamField>
+
+<ParamField body="HPerc" type="string">
+  Height percentile label.
+</ParamField>
+
+<ParamField body="HeadCircumference" type="decimal" required>
+  Head circumference in centimetres (precision `13,3`).
+</ParamField>
+
+<ParamField body="HCPerc" type="string">
+  Head circumference percentile label.
+</ParamField>
+
+<ParamField body="Bmi" type="decimal" required>
+  Body mass index (precision `13,3`).
+</ParamField>
+
+**Responses:** `200 OK`, `400 Bad Request`, or `500 Internal Server Error`.
+
+---
+
+### GET /GrowthChart/Edit/{id}
+
+Returns the `_Create` partial pre-filled with the existing entry for editing.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `GrowthChart.Id` to edit.
+</ParamField>
+
+**Response:** Partial view `_Create` with existing data, `400 Bad Request` for empty ID, or `404 Not Found`.
+
+---
+
+### POST /GrowthChart/Edit
+
+Updates an existing growth chart entry. `Id` must be non-empty. Requires anti-forgery token and valid `ModelState`.
+
+**Responses:** `200 OK`, `400 Bad Request`, or `500 Internal Server Error`.
+
+---
+
+### DELETE /GrowthChart/Delete/{id}
+
+Deletes the specified growth chart entry.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `GrowthChart.Id` to delete.
+</ParamField>
+
+**Response:** `200 OK`, `400 Bad Request` for empty ID, or `500 Internal Server Error`.
+
+---
+
+## Permanent Medications (PermMed)
+
+`PermMedController` maintains the list of medications a patient takes on an ongoing basis. Each `PermMed` record contains a `Description` string and the owning `PatientId`. There is no edit action — corrections are made by deleting and re-creating the entry.
+
+### Endpoint summary
+
+| Method | Path | Roles | Description |
+|--------|------|-------|-------------|
+| `GET` | `/PermMed/Index/{id}` | Medico | Returns `_Table` partial |
+| `POST` | `/PermMed/Initialize` | Medico | DataTables data feed |
+| `GET` | `/PermMed/Create/{id}` | Medico | Returns `_Create` partial |
+| `POST` | `/PermMed/Create` | Medico | Inserts a medication entry |
+| `DELETE` | `/PermMed/Delete/{id}` | Medico | Deletes a medication entry |
+
+---
+
+### GET /PermMed/Index/{id}
+
+Fetches all permanent medication records for the patient and returns the `_Table` partial.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Patient.Id`.
+</ParamField>
+
+**Response:** Partial view `_Table` with `IEnumerable<PermMed>`, or `400 Bad Request`.
+
+---
+
+### POST /PermMed/Initialize
+
+DataTables feed for a patient's permanent medication list.
+
+<ParamField body="patientId" type="string (GUID)" required>
+  The patient whose medication records to retrieve.
+</ParamField>
+
+**Response** — `200 OK`, `application/json`
+
+```json
+{
+  "draw": "1",
+  "recordsFiltered": 2,
+  "recordsTotal": 2,
+  "data": [
+    {
+      "id": "11223344-aabb-ccdd-eeff-001122334455",
+      "description": "Salbutamol 100mcg — 2 puffs cada 8 hs",
+      "patientId": "c1d2e3f4-0000-1111-2222-333344445555"
+    }
+  ]
+}
+```
+
+---
+
+### GET /PermMed/Create/{id}
+
+Returns the `_Create` partial with a new `PermMed` model pre-set with `PatientId`. Generates an anti-forgery token.
+
+<ParamField path="id" type="string (GUID)" required>
+  The patient to associate the medication with.
+</ParamField>
+
+---
+
+### POST /PermMed/Create
+
+Inserts a new permanent medication entry. Requires anti-forgery token.
+
+<ParamField body="PatientId" type="string (GUID)" required>
+  Must not be `Guid.Empty`.
+</ParamField>
+
+<ParamField body="Description" type="string">
+  Description of the medication, including dosage and schedule.
+</ParamField>
+
+**Responses:** `200 OK`, `400 Bad Request`, or `500 Internal Server Error`.
+
+---
+
+### DELETE /PermMed/Delete/{id}
+
+Deletes the specified permanent medication entry.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `PermMed.Id` to delete.
+</ParamField>
+
+**Response:** `200 OK`, `400 Bad Request` for empty ID, or `500 Internal Server Error`.
+
+---
+
+## Personal Background
+
+`PersonalBackgroundController` manages a patient's personal medical history — a fixed set of boolean flags covering common conditions and past medical events. Because the `PersonalBackground` entity uses the patient's own `Guid` as its primary key (via `PatientFKEntity`), there is no "create" action; the record is seeded when the patient is registered and subsequently edited in place.
+
+### Endpoint summary
+
+| Method | Path | Roles | Description |
+|--------|------|-------|-------------|
+| `GET` | `/PersonalBackground/Index/{id}` | Medico | Returns `_Details` partial |
+| `GET` | `/PersonalBackground/Edit/{id}` | Medico | Returns `_Edit` partial |
+| `PUT` | `/PersonalBackground/Edit` | Medico | Updates the personal background record |
+
+---
+
+### GET /PersonalBackground/Index/{id}
+
+Loads the personal background record for the given patient (using the patient's own `Guid` as the record key) and returns the `_Details` partial view.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Patient.Id` (= `PersonalBackground.Id`).
+</ParamField>
+
+**Response:** Partial view `_Details`, or `400 Bad Request`.
+
+---
+
+### GET /PersonalBackground/Edit/{id}
+
+Returns the `_Edit` partial pre-filled with the existing record. Injects an anti-forgery token.
+
+<ParamField path="id" type="string (GUID)" required>
+  The patient ID whose personal background to edit.
+</ParamField>
+
+**Response:** Partial view `_Edit` with the `PersonalBackground` model, or `400 Bad Request`.
+
+---
+
+### PUT /PersonalBackground/Edit
+
+Updates the `PersonalBackground` record. The `Patient` navigation property is removed from `ModelState` before validation to avoid spurious failures when the navigation object is absent. On success the action calls `GET /PersonalBackground/Index` internally and returns the refreshed `_Details` partial — the client receives updated HTML rather than a plain status code.
+
+**Request body** — boolean flag fields of `PersonalBackground`:
+
+<ParamField body="Id" type="string (GUID)" required>
+  The `PersonalBackground.Id` (= `Patient.Id`).
+</ParamField>
+
+<ParamField body="Asthma" type="boolean">Asma</ParamField>
+<ParamField body="Allergy" type="boolean">Alergias</ParamField>
+<ParamField body="Pulmonologist" type="boolean">Neumonológicos</ParamField>
+<ParamField body="Pneumonia" type="boolean">Neumonías</ParamField>
+<ParamField body="Mumps" type="boolean">Paperas</ParamField>
+<ParamField body="Psicologicals" type="boolean">Psicologicos</ParamField>
+<ParamField body="Accidents" type="boolean">Accidentes</ParamField>
+<ParamField body="HematOnc" type="boolean">Hematooncológicos</ParamField>
+<ParamField body="Rubella" type="boolean">Rubeola</ParamField>
+<ParamField body="Otitis" type="boolean">Otítis</ParamField>
+<ParamField body="Measles" type="boolean">Sarampión</ParamField>
+<ParamField body="Chickenpox" type="boolean">Varicela</ParamField>
+<ParamField body="UrinaryInfections" type="boolean">Infec. Urinarias</ParamField>
+<ParamField body="Surgeries" type="boolean">Cirugías</ParamField>
+<ParamField body="Diabetes" type="boolean">Diabetes</ParamField>
+<ParamField body="Digestive" type="boolean">Digestivos</ParamField>
+<ParamField body="Other" type="string">Free-text field for other conditions not listed above.</ParamField>
+
+**Responses:** Updated `_Details` partial HTML on success, `400 Bad Request` for invalid model, or `500 Internal Server Error`.
+
+---
+
+## Perinatal Background
+
+`PerinatalBackgroundController` records obstetric and neonatal history for a patient. Like `PersonalBackground`, the `PerinatalBackground` entity shares the patient's `Guid` as its primary key, so there is no create action. Note that `PerinatalBackgroundController` does not carry an `[Authorize]` attribute at the class level in source — access control is enforced at the route level via the application's global policies, but there is no role assertion in the controller attributes themselves.
+
+### Endpoint summary
+
+| Method | Path | Roles | Description |
+|--------|------|-------|-------------|
+| `GET` | `/PerinatalBackground/Index/{id}` | Medico | Returns `_Details` partial |
+| `GET` | `/PerinatalBackground/Edit/{id}` | Medico | Returns `_Edit` partial |
+| `PUT` | `/PerinatalBackground/Edit` | Medico | Updates the perinatal background record |
+
+---
+
+### GET /PerinatalBackground/Index/{id}
+
+Loads the perinatal background for the patient and returns the `_Details` partial view.
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Patient.Id` (= `PerinatalBackground.Id`).
+</ParamField>
+
+**Response:** Partial view `_Details`, or `400 Bad Request`.
+
+---
+
+### GET /PerinatalBackground/Edit/{id}
+
+Returns the `_Edit` partial pre-filled with the existing record. Returns `404 Not Found` when no record exists. Injects an anti-forgery token.
+
+<ParamField path="id" type="string (GUID)" required>
+  The perinatal background record ID (= patient ID).
+</ParamField>
+
+**Response:** Partial view `_Edit`, `400 Bad Request`, or `404 Not Found`.
+
+---
+
+### PUT /PerinatalBackground/Edit
+
+Updates the `PerinatalBackground` record. The `Patient` navigation property is excluded from `ModelState` validation. On success, the action calls `GET /PerinatalBackground/Index` internally and returns the refreshed `_Details` partial.
+
+**Request body** — numeric obstetric fields of `PerinatalBackground`:
+
+<ParamField body="Id" type="string (GUID)" required>
+  The `PerinatalBackground.Id` (= `Patient.Id`).
+</ParamField>
+
+<ParamField body="Feat" type="integer">Number of pregnancies (Gesta).</ParamField>
+<ParamField body="Delivery" type="integer">Number of vaginal deliveries (Parto).</ParamField>
+<ParamField body="Cesarean" type="integer">Number of caesarean deliveries (Cesárea).</ParamField>
+<ParamField body="Abort" type="integer">Number of spontaneous/voluntary abortions (Aborto).</ParamField>
+<ParamField body="Weight" type="integer">Birth weight in grams (Peso).</ParamField>
+<ParamField body="Height" type="integer">Birth length in centimetres (Talla).</ParamField>
+<ParamField body="CefPer" type="integer">Cephalic perimeter at birth in centimetres (Perimetro Cefálico).</ParamField>
+<ParamField body="Apgar1" type="integer">Apgar score at 1 minute.</ParamField>
+<ParamField body="Apgar5" type="integer">Apgar score at 5 minutes.</ParamField>
+<ParamField body="GestAge" type="integer">Gestational age in weeks at birth (Edad Gestacional).</ParamField>
+<ParamField body="Pathologies" type="string">Free-text list of perinatal pathologies.</ParamField>
+<ParamField body="CongErrors" type="string">Free-text description of congenital errors.</ParamField>
+
+**Responses:** Updated `_Details` partial HTML on success, `400 Bad Request` for invalid model, or `500 Internal Server Error`.

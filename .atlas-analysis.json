@@ -1,0 +1,130 @@
+{
+  "projectType": "saas",
+  "projectName": "Turnero",
+  "projectDescription": "A full-stack ASP.NET Core web application for managing medical appointment scheduling and patient records in clinical offices.",
+  "theme": "almond",
+  "primaryColor": "#157fc6",
+  "lightColor": "#84ccdc",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "deployment"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/appointments",
+              "features/patients",
+              "features/medical-records"
+            ]
+          },
+          {
+            "group": "Administration",
+            "pages": [
+              "admin/users-and-roles",
+              "admin/medics",
+              "admin/appointment-times"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/database",
+              "configuration/authentication",
+              "configuration/firebase",
+              "configuration/realtime"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Controllers",
+            "pages": [
+              "reference/turns",
+              "reference/patients",
+              "reference/medical-history",
+              "reference/administration"
+            ]
+          },
+          {
+            "group": "Data Models",
+            "pages": [
+              "reference/models/turn",
+              "reference/models/patient",
+              "reference/models/medic"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Appointment (turn) scheduling with date, time, and doctor assignment",
+    "Public self-service appointment booking without login",
+    "Real-time appointment table updates via SignalR hub",
+    "Patient management with full medical history (visits, allergies, vaccines, growth charts)",
+    "Perinatal and personal background records per patient",
+    "Permanent medication tracking per patient",
+    "Congenital error screening records (Neonatal screening)",
+    "Growth chart tracking with weight, height, BMI, and percentile data",
+    "Role-based access control (Admin, Medico, Ingreso)",
+    "Firebase authentication integration for external JWT login",
+    "Excel and PDF export of daily appointment lists",
+    "Progressive Web App (PWA) with desktop push notifications",
+    "PostgreSQL database with Entity Framework Core migrations",
+    "CI/CD pipeline with GitHub Actions for production deployment"
+  ],
+  "publicApiSurface": [
+    "GET /Turns/Index — appointment list view (roles: Ingreso, Medico)",
+    "POST /Turns/InitializeTurns — DataTables JSON endpoint for appointments",
+    "GET /Turns/Create — create appointment partial view",
+    "POST /Turns/Create — create appointment (TurnDTO)",
+    "PUT /Turns/Edit — update appointment (TurnDTO)",
+    "DELETE /Turns/Delete/{id} — delete appointment",
+    "POST /Turns/Accessed/{id} — mark patient as arrived (role: Medico)",
+    "POST /Turns/ExportExcel — export appointments to .xlsx",
+    "POST /Turns/ExportPdf — export appointments to PDF",
+    "GET /TurnsPublic/Index — public appointment booking page (anonymous)",
+    "POST /TurnsPublic/Create — create spontaneous appointment (anonymous)",
+    "GET /Patients/Index — patient list (role: Medico)",
+    "GET /Patients/Details/{id} — patient detail with medical history",
+    "POST /Patients/Create — register new patient",
+    "PUT /Patients/Edit — update patient record",
+    "GET /Visits/Create/{id} — new visit form for patient",
+    "POST /Visits/Create — save visit record",
+    "GET /Visits/Details/{id} — view visit detail",
+    "GET /Vaccines/Index/{id} — vaccine list for patient",
+    "POST /Vaccines/Create — add vaccine record",
+    "PUT /Vaccines/Edit — update vaccine record",
+    "DELETE /Vaccines/Delete/{id} — remove vaccine record",
+    "GET /Allergies — allergy list for patient",
+    "POST /Allergies/Create — add allergy",
+    "PUT /Allergies/Edit — update allergy",
+    "DELETE /Allergies/Delete/{id} — remove allergy",
+    "GET /GrowthChart — growth chart entries for patient",
+    "POST /GrowthChart/Create — add growth measurement",
+    "GET /Medics/Index — medic list (role: Admin)",
+    "POST /Medics/Create — register medic",
+    "GET /TimeTurn/Index — appointment time slot list (role: Admin)",
+    "POST /TimeTurn/Create — create time slot",
+    "GET /Administration/ListUsers — user management (role: Admin)",
+    "GET /Administration/ManageUserClaims — manage user claims",
+    "GET /Role/Index — role list (role: Admin)",
+    "POST /Role/Create — create role",
+    "POST /api/Firebase/register — Firebase user registration",
+    "POST /api/Firebase/login — Firebase JWT login",
+    "SignalR Hub: /TurnsTableHub — real-time appointment table updates"
+  ]
+}

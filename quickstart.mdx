@@ -1,47 +1,148 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Turnero in Under 10 Minutes"
+sidebarTitle: "Quickstart"
+description: "Clone Turnero, configure a PostgreSQL database and connection string, apply EF Core migrations, and run the app locally in a few steps."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+Getting Turnero running locally requires only a PostgreSQL server and the .NET 10 SDK. The entire setup — from cloning the repository to seeing the login page in your browser — takes fewer than ten minutes on a clean machine. Firebase is entirely optional and only needed if you want to enable the mobile push-notification and JWT authentication features.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+
+  <Step title="Install Prerequisites">
+    Make sure the following tools are available on your machine before you begin.
+
+    | Requirement | Minimum version | Notes |
+    |-------------|-----------------|-------|
+    | [.NET SDK](https://dotnet.microsoft.com/download/dotnet/10.0) | 10.0 | Includes the `dotnet` CLI, EF Core tools can be installed on top |
+    | [PostgreSQL](https://www.postgresql.org/download/) | 13+ | Any edition; a local install or Docker container both work |
+    | [EF Core CLI tools](https://learn.microsoft.com/en-us/ef/core/cli/dotnet) | — | Install once globally with `dotnet tool install --global dotnet-ef` |
+    | Git | — | To clone the repository |
+    | Firebase project | — | **Optional.** Only required for push notifications and JWT auth |
+
+    Verify your .NET installation:
 
     ```bash
-    npm install your-package
+    dotnet --version
+    # Should print 10.0.x or later
     ```
+
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Clone the Repository">
+    Clone the Turnero source from GitHub and move into the project root:
 
     ```bash
-    your-cli init
+    git clone https://github.com/pabloeferreyra/Turnero.git
+    cd Turnero
     ```
+
+    The repository contains four .NET projects in a single solution:
+
+    ```
+    Turnero/          ← ASP.NET Core MVC host (this is the startup project)
+    Turnero.DAL/      ← EF Core DbContext, models, repositories, migrations
+    Turnero.SL/       ← Business-logic services
+    Turnero.Utilities/← Shared helpers and Mapster mappings
+    ```
+
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Configure the Database Connection String">
+    Turnero reads its PostgreSQL connection string from the `ConnectionStrings:LocalConnection` configuration key. **Never commit credentials to source control.** Use the .NET user-secrets store instead — it writes values to an OS-protected folder outside the repository.
+
+    Initialise user secrets for the `Turnero` project (the `UserSecretsId` is already declared in `Turnero.csproj`):
 
     ```bash
-    your-cli start
+    dotnet user-secrets init --project Turnero
     ```
+
+    Set the connection string, replacing the placeholder values with your actual PostgreSQL host, port, database name, and credentials:
+
+    ```bash
+    dotnet user-secrets set "ConnectionStrings:LocalConnection" \
+      "Host=localhost;Port=5432;Database=turnero;Username=postgres;Password=yourpassword" \
+      --project Turnero
+    ```
+
+    If your PostgreSQL instance requires SSL, append `;SSL Mode=Require;Trust Server Certificate=true` to the connection string.
+
+    <Note>
+      The `appsettings.json` file committed to the repository intentionally omits the `ConnectionStrings` section. The application reads it exclusively from user secrets in development and from environment variables or a secured `appsettings.json` on the production server.
+    </Note>
+
   </Step>
+
+  <Step title="Apply EF Core Migrations">
+    Turnero ships with a full migration history inside `Turnero.DAL/Migrations/`. Run all pending migrations against your PostgreSQL database in one command:
+
+    ```bash
+    dotnet ef database update --project Turnero.DAL --startup-project Turnero
+    ```
+
+    EF Core will create the database if it does not already exist, then apply every migration in order. On first run this creates tables for ASP.NET Identity (`AspNetUsers`, `AspNetRoles`, …) as well as the Turnero domain tables (`Turns`, `Medics`, `TimeTurnViewModel`, `Patients`, and all clinical sub-module tables).
+
+    Confirm the migration succeeded by connecting with `psql` or pgAdmin and checking that the `__EFMigrationsHistory` table is present:
+
+    ```sql
+    SELECT "MigrationId" FROM "__EFMigrationsHistory" ORDER BY 1;
+    ```
+
+  </Step>
+
+  <Step title="Run the Application">
+    Start the development server from the solution root:
+
+    ```bash
+    dotnet run --project Turnero
+    ```
+
+    The application boots, pre-warms its in-memory caches (time slots and doctors), then begins listening. You should see output similar to:
+
+    ```
+    info: Microsoft.Hosting.Lifetime[14]
+          Now listening on: https://localhost:5001
+    info: Microsoft.Hosting.Lifetime[14]
+          Now listening on: http://localhost:5000
+    ```
+
+    Open `https://localhost:5001` in your browser. Accept any self-signed certificate warning in your browser — this is expected in local development.
+
+  </Step>
+
+  <Step title="First Login — Create the Admin User">
+    Turnero uses ASP.NET Core Identity for authentication. There is no seeded default user, so you must register the first account yourself and then elevate it to the **Admin** role.
+
+    1. **Register an account.** Click *Register* on the login page and fill in an email address and password. The password policy requires at least 6 characters with at least one digit and one lowercase letter.
+
+    2. **Assign the Admin role.** Because no admin exists yet, you must assign the role directly in the database. Connect to PostgreSQL and run:
+
+    ```sql
+    -- 1. Find your new user
+    SELECT "Id", "Email" FROM "AspNetUsers";
+
+    -- 2. Ensure the Admin role exists (insert if missing)
+    INSERT INTO "AspNetRoles" ("Id", "Name", "NormalizedName", "ConcurrencyStamp")
+    VALUES (gen_random_uuid()::text, 'Admin', 'ADMIN', gen_random_uuid()::text)
+    ON CONFLICT DO NOTHING;
+
+    -- 3. Link the user to the Admin role
+    INSERT INTO "AspNetUserRoles" ("UserId", "RoleId")
+    SELECT u."Id", r."Id"
+    FROM "AspNetUsers" u, "AspNetRoles" r
+    WHERE u."Email" = 'you@example.com'
+      AND r."NormalizedName" = 'ADMIN';
+    ```
+
+    3. **Log in.** Return to the application and log in with the account you registered. You now have full Admin access and can create additional users and assign the **Medico** or **Ingreso** roles through the *Administration* panel without needing direct database access again.
+
+    <Tip>
+      After your first Admin is set up, all subsequent user management — creating accounts, assigning roles, managing doctors — is done entirely through the Turnero web UI under the **Administration** menu.
+    </Tip>
+
+  </Step>
+
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
-
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+<Note>
+  **Optional: Firebase push notifications.** If you want to enable desktop push notifications and Firebase JWT authentication, you need to create a Firebase project, download its service-account JSON file, and save it to the user-secrets folder at the path resolved by `Program.cs`. See the [Firebase Configuration](/configuration/firebase) guide for full instructions.
+</Note>

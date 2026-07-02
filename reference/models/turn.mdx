@@ -1,0 +1,246 @@
+---
+title: "Turn and TimeTurn Data Models"
+sidebarTitle: "Turn"
+description: "Reference for the Turn, TurnDTO, and TimeTurn entity models used for appointment scheduling in Turnero's PostgreSQL database schema."
+---
+
+Turnero's appointment system is built around two core entities: `Turn` and `TimeTurn`. A `Turn` represents a single scheduled appointment slot, capturing the patient identity, the assigned medic, the appointment date, and the booked time slot. `TimeTurn` is a separate lookup entity that holds the discrete time values (e.g. `"09:00"`) available for booking, allowing the schedule grid to remain consistent across days. At the API and DataTables layer, the `TurnDTO` projection flattens navigation properties—medic name and time string—into a single serializable object, making it suitable for JSON responses and real-time SignalR updates.
+
+---
+
+## Turn
+
+The `Turn` entity maps directly to the `Turns` table in PostgreSQL. The `DateTurn` column is stored as a plain SQL `date` type (configured in `ApplicationDbContext.OnModelCreating`), which strips the time component and keeps only the calendar date.
+
+```csharp
+namespace Turnero.DAL.Models;
+
+public class Turn
+{
+    [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+    public Guid Id { get; set; }
+
+    [Display(Name = "Nombre"), Required]
+    public string? Name { get; set; }
+
+    [Required]
+    public long? Dni { get; set; }
+
+    [Display(Name = "Médico")]
+    public Medic? Medic { get; set; }
+    public Guid MedicId { get; set; }
+
+    [Display(Name = "Fecha"), Required]
+    [DataType(DataType.Date)]
+    [DisplayFormat(DataFormatString = "{0:dd/MM/yyyy}", ApplyFormatInEditMode = true)]
+    public DateTime DateTurn { get; set; }
+
+    [Display(Name = "Hora")]
+    public TimeTurn? Time { get; set; }
+    public Guid TimeId { get; set; }
+
+    [Display(Name = "Obra Social")]
+    public string? SocialWork { get; set; }
+
+    [Display(Name = "Motivo")]
+    public string? Reason { get; set; }
+
+    [Display(Name = "Ingresado")]
+    public bool Accessed { get; set; }
+}
+```
+
+### Fields
+
+<ResponseField name="Id" type="Guid" required>
+  Primary key. Generated automatically by the database using the Identity strategy (`DatabaseGeneratedOption.Identity`). Exposed as a UUID in all API responses.
+</ResponseField>
+
+<ResponseField name="Name" type="string?" required>
+  The patient's full name as entered at booking time. This is a free-text copy of the patient's name for the appointment and is distinct from any linked `Patient` record.
+</ResponseField>
+
+<ResponseField name="Dni" type="long?" required>
+  The patient's national identity number (DNI). Stored as a 64-bit integer to accommodate large numeric IDs.
+</ResponseField>
+
+<ResponseField name="MedicId" type="Guid" required>
+  Foreign key referencing `Medics.Id`. Must be set when creating a turn.
+</ResponseField>
+
+<ResponseField name="Medic" type="Medic?">
+  Navigation property. Populated when the entity is loaded with `.Include(t => t.Medic)`. See the [Medic model](/reference/models/medic) for field details.
+</ResponseField>
+
+<ResponseField name="DateTurn" type="DateTime" required>
+  The calendar date of the appointment. Stored in PostgreSQL as a `date` column (no time component). Display format is `dd/MM/yyyy`. In the `TurnDTO` projection this value is serialized as the `Date` string.
+</ResponseField>
+
+<ResponseField name="TimeId" type="Guid" required>
+  Foreign key referencing `TimeTurns.Id`.
+</ResponseField>
+
+<ResponseField name="Time" type="TimeTurn?">
+  Navigation property to the associated `TimeTurn` slot. The `Time.Time` string (e.g. `"09:00"`) is projected into `TurnDTO.Time` by the Mapster configuration.
+</ResponseField>
+
+<ResponseField name="SocialWork" type="string?">
+  The patient's health insurance provider (obra social) at the time of booking. Optional.
+</ResponseField>
+
+<ResponseField name="Reason" type="string?">
+  Free-text reason or chief complaint for the appointment. Optional.
+</ResponseField>
+
+<ResponseField name="Accessed" type="bool">
+  Indicates whether the patient has physically checked in at the clinic. Defaults to `false`. Updated to `true` when reception marks the patient as arrived.
+</ResponseField>
+
+---
+
+## TurnDTO
+
+`TurnDTO` is the Data Transfer Object used in controller actions, JSON API responses, and DataTables rendering. It flattens the `Medic` and `TimeTurn` navigation properties into plain strings, and reformats `DateTurn` as an ISO-8601 date string. The `IsMedic` flag is populated at query time (not mapped from `Turn`) to drive view-level conditional logic.
+
+```csharp
+namespace Turnero.DAL.Models;
+
+public class TurnDTO
+{
+    public Guid Id { get; set; }
+    [Display(Name = "Nombre")]
+    public string? Name { get; set; }
+    public long? Dni { get; set; }
+    public Guid MedicId { get; set; }
+    [Display(Name = "Médico")]
+    public string? MedicName { get; set; }
+    [Display(Name = "Fecha")]
+    public string? Date { get; set; }
+    [Display(Name = "Hora")]
+    public string? Time { get; set; }
+    public Guid TimeId { get; set; }
+    [Display(Name = "Obra Social")]
+    public string? SocialWork { get; set; }
+    [Display(Name = "Motivo")]
+    public string? Reason { get; set; }
+    [Display(Name = "Ingresado")]
+    public bool Accessed { get; set; }
+    public bool? IsMedic { get; set; }
+}
+```
+
+### Fields
+
+<ResponseField name="Id" type="Guid">
+  Matches `Turn.Id`.
+</ResponseField>
+
+<ResponseField name="Name" type="string?">
+  Patient name. Mapped directly from `Turn.Name`.
+</ResponseField>
+
+<ResponseField name="Dni" type="long?">
+  Patient DNI. Mapped directly from `Turn.Dni`.
+</ResponseField>
+
+<ResponseField name="MedicId" type="Guid">
+  The medic's identifier. Explicitly mapped from `Turn.MedicId` by the Mapster configuration.
+</ResponseField>
+
+<ResponseField name="MedicName" type="string?">
+  The medic's display name. Derived from `Turn.Medic.Name` when the navigation property is not null; otherwise `null`.
+</ResponseField>
+
+<ResponseField name="Date" type="string?">
+  The appointment date formatted as `"yyyy-MM-dd"` (ISO 8601). Mapped from `Turn.DateTurn.ToString("yyyy-MM-dd")`. When mapping a `TurnDTO` back to a `Turn`, this string is parsed with `DateTime.ParseExact(src.Date, "yyyy-MM-dd", null)`, falling back to `DateTime.MinValue` if empty.
+</ResponseField>
+
+<ResponseField name="Time" type="string?">
+  The human-readable time slot string (e.g. `"09:00"`). Derived from `Turn.Time.Time` when the navigation property is not null.
+</ResponseField>
+
+<ResponseField name="TimeId" type="Guid">
+  The time slot's identifier. Explicitly mapped from `Turn.TimeId`.
+</ResponseField>
+
+<ResponseField name="SocialWork" type="string?">
+  Health insurance provider. Mapped directly.
+</ResponseField>
+
+<ResponseField name="Reason" type="string?">
+  Appointment reason. Mapped directly.
+</ResponseField>
+
+<ResponseField name="Accessed" type="bool">
+  Check-in status. Mapped directly.
+</ResponseField>
+
+<ResponseField name="IsMedic" type="bool?">
+  Not mapped from `Turn`. Ignored by the Mapster configuration and set at the service/controller level to indicate whether the currently authenticated user is the medic assigned to this turn, enabling the view to show or hide medic-specific actions.
+</ResponseField>
+
+---
+
+## TimeTurn
+
+`TimeTurn` is a lookup table of bookable time slots. Each row represents one discrete time of day (e.g. `"08:00"`, `"09:00"`) and holds a collection of all `Turn` records that reference it. New time slots are typically seeded or managed by an administrator.
+
+```csharp
+namespace Turnero.DAL.Models;
+
+public class TimeTurn
+{
+    public Guid Id { get; set; }
+    public string? Time { get; set; }
+    public ICollection<Turn>? Turns { get; set; }
+}
+```
+
+### Fields
+
+<ResponseField name="Id" type="Guid" required>
+  Primary key.
+</ResponseField>
+
+<ResponseField name="Time" type="string?">
+  The time of day as a display string, conventionally in `"HH:mm"` format (e.g. `"09:00"`, `"14:30"`). This value is read directly into `TurnDTO.Time` during the Mapster projection.
+</ResponseField>
+
+<ResponseField name="Turns" type="ICollection<Turn>?">
+  Reverse navigation collection. Contains all `Turn` records that have been booked into this time slot across all dates and medics.
+</ResponseField>
+
+---
+
+## Mapster Mapping Configuration
+
+Turnero uses [Mapster](https://github.com/MapsterMapper/Mapster) for object-to-object mapping, configured in `Turnero.Utilities.Utilities.MapsterConfig.RegisterMappings()`. The following rules govern the `Turn ↔ TurnDTO` relationship.
+
+```csharp
+// Turn → TurnDTO
+TypeAdapterConfig<Turn, TurnDTO>.NewConfig()
+    .Map(dest => dest.Time,      src => src.Time != null ? src.Time.Time : null)
+    .Map(dest => dest.TimeId,    src => src.TimeId)
+    .Map(dest => dest.MedicName, src => src.Medic != null ? src.Medic.Name : null)
+    .Map(dest => dest.MedicId,   src => src.MedicId)
+    .Ignore(dest => dest.IsMedic)
+    .Map(dest => dest.Date,      src => src.DateTurn.ToString("yyyy-MM-dd"));
+
+// TurnDTO → Turn
+TypeAdapterConfig<TurnDTO, Turn>.NewConfig()
+    .Map(dest => dest.Time.Id,  src => src.TimeId)
+    .Ignore(dest => dest.Time)
+    .Map(dest => dest.Medic.Id, src => src.MedicId)
+    .Ignore(dest => dest.Medic)
+    .Map(dest => dest.DateTurn,
+         src => !string.IsNullOrEmpty(src.Date)
+                ? DateTime.ParseExact(src.Date, "yyyy-MM-dd", null)
+                : DateTime.MinValue);
+```
+
+Key points to note:
+
+- **Date serialization format**: `Turn.DateTurn` is a `DateTime`, but `TurnDTO.Date` is always a `string` in `"yyyy-MM-dd"` format (ISO 8601). Although the `[DisplayFormat]` attribute on the entity uses `dd/MM/yyyy` for Razor view rendering, the DTO uses ISO 8601 to ensure reliable round-trip parsing in JSON contexts.
+- **Navigation properties are ignored on the reverse map**: When adapting a `TurnDTO` back to a `Turn`, the `Medic` and `Time` navigation properties are deliberately ignored to prevent Mapster from trying to instantiate them. Only the foreign-key scalar properties (`MedicId`, `TimeId`) are written through.
+- **`IsMedic` is always ignored**: The `IsMedic` flag has no counterpart on `Turn` and is excluded from mapping in both directions.
+- **`Visit → VisitDTO`** also uses a date-to-string mapping, serializing `VisitDate` as `"yyyy-MM-dd"` and resolving the medic name from the navigation property.

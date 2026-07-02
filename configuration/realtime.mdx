@@ -1,0 +1,131 @@
+---
+title: "Real-Time Appointment Updates with SignalR"
+sidebarTitle: "Real-Time"
+description: "Configure and use the Turnero SignalR hub to push live appointment table updates to connected clinic staff without page refreshes."
+---
+
+Turnero uses ASP.NET Core SignalR to broadcast appointment changes to every connected browser the moment they happen. Rather than polling the server on a timer, clinic reception staff and doctors receive an instant notification whenever a turn is booked, accessed, edited, or deleted — and the appointment DataTable on screen refreshes automatically. No browser extension or third-party push service is required.
+
+## How SignalR Is Registered
+
+SignalR is added with the JSON protocol and mapped to its hub route in `Program.cs`:
+
+```csharp
+// Service registration
+builder.Services.AddSignalR()
+    .AddJsonProtocol();
+
+// Route mapping (after app.UseAuthorization())
+app.MapHub<TurnsTableHub>("/TurnsTableHub");
+```
+
+The JSON protocol means all hub messages are serialised as JSON, making them straightforward to consume from any JavaScript client.
+
+## TurnsTableHub Methods
+
+`TurnsTableHub` exposes two server-side methods that Turnero's service layer calls when appointment state changes:
+
+```csharp
+public class TurnsTableHub : Hub
+{
+    // Send a message to a single connected user identified by their userId
+    public async Task UpdateTableDirected(string user, string message, string date)
+    {
+        await Clients.User(user).SendAsync(message, date);
+    }
+
+    // Broadcast a message to every connected client
+    public async Task UpdateTable(string message)
+    {
+        await Clients.All.SendAsync(message);
+    }
+}
+```
+
+| Method | Target | When to use |
+|---|---|---|
+| `UpdateTableDirected` | A single user by ASP.NET Identity user ID | Notify a specific doctor or the Ingreso role users |
+| `UpdateTable` | All connected clients | Broadcast deletions or global state changes |
+
+<Note>
+  `Clients.User(userId)` resolves the target connection using ASP.NET Core's built-in `IUserIdProvider`, which maps the authenticated `ClaimsPrincipalNameIdentifier` claim (the ASP.NET Identity user ID) to open WebSocket connections. A doctor must be currently logged in for directed notifications to reach their browser.
+</Note>
+
+## When Turnero Pushes Updates
+
+The service layer calls hub methods via `IHubContext<TurnsTableHub>` in response to four events:
+
+| Event | Hub call | Recipients |
+|---|---|---|
+| New appointment created | `UpdateTableDirected(doctorUserId, message, date)` | The assigned doctor only |
+| Appointment marked as Accessed | `UpdateTableDirected(userId, message, date)` | All users in the **Ingreso** role |
+| Appointment edited | `UpdateTableDirected(userId, message, date)` | All users in the **Ingreso** role |
+| Appointment deleted | `UpdateTable(message)` | All connected clients |
+
+This means a doctor's browser updates silently when a new turn is booked for them, while reception staff (Ingreso role) see live updates for accessed and edited turns, and every open session reflects deletions immediately.
+
+## Client-Side Setup
+
+Add the SignalR JavaScript client from the CDN or your bundled assets, then connect to the hub and register listeners for both message types:
+
+```html
+<script src="~/lib/microsoft/signalr/dist/browser/signalr.min.js"></script>
+```
+
+```javascript
+const connection = new signalR.HubConnectionBuilder()
+    .withUrl("/TurnsTableHub")
+    .build();
+
+// Broadcast handler — fires on appointment deletion
+connection.on("UpdateTable", function (message) {
+    // Reload the DataTable without a full page refresh
+    turnsTable.ajax.reload();
+});
+
+// Directed handler — fires on create, access, and edit events
+connection.on("UpdateTableDirected", function (medicName, message, date) {
+    // Show a toast notification with context
+    showNotification(medicName, message);
+    turnsTable.ajax.reload();
+});
+
+connection.start().catch(err => console.error(err));
+```
+
+<Tip>
+  Use `.withAutomaticReconnect()` on the `HubConnectionBuilder` to handle brief network interruptions gracefully without requiring a page reload:
+
+  ```javascript
+  const connection = new signalR.HubConnectionBuilder()
+      .withUrl("/TurnsTableHub")
+      .withAutomaticReconnect()
+      .build();
+  ```
+</Tip>
+
+## CORS Configuration
+
+Turnero's middleware pipeline configures CORS before authentication runs, permitting any origin to connect:
+
+```csharp
+app.UseCors(policy => policy
+    .AllowAnyOrigin()
+    .AllowAnyMethod()
+    .AllowAnyHeader());
+```
+
+This allows SignalR connections from different origins (for example, a separate front-end application or a mobile WebView). If you want to restrict access to known clinic domains, replace `AllowAnyOrigin()` with `WithOrigins("https://clinic.example")`.
+
+<Warning>
+  `AllowAnyOrigin` combined with `AllowCredentials` is not supported by the browser security model. Turnero does not call `AllowCredentials`, so the broad origin policy is valid — but be aware that cookie-based authentication requires same-origin requests; only the JWT bearer path works cross-origin.
+</Warning>
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Directed notifications never arrive | Doctor is not logged in | Ensure the target user has an active authenticated session |
+| `UpdateTableDirected` fires but the DataTable does not reload | Event name mismatch | Confirm the string passed to `SendAsync` matches the name registered in `connection.on(...)` |
+| WebSocket connection refused in browser console | HTTPS not configured in development | Run with `dotnet run --launch-profile https` or trust the dev certificate with `dotnet dev-certs https --trust` |
+| Hub disconnects after idle period | Reverse-proxy timeout | Increase the proxy's WebSocket timeout (e.g. `proxy_read_timeout 3600` in Nginx) |

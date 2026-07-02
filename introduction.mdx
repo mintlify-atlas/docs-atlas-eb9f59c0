@@ -1,0 +1,101 @@
+---
+title: "Turnero: Medical Appointment & Records Platform"
+sidebarTitle: "Introduction"
+description: "Turnero is an open-source ASP.NET Core web app for clinic appointment scheduling and patient medical record management, built on PostgreSQL and SignalR."
+---
+
+Turnero is a free, open-source clinic management platform built with ASP.NET Core MVC (.NET 10). It gives small-to-medium medical practices a single web application to handle everything from walk-in registration and appointment booking to complete longitudinal patient records — without needing a third-party SaaS subscription. Clinic administrators, receptionists, and doctors each get a purpose-built view of the data they need, while a real-time SignalR hub keeps every workstation in sync the moment an appointment status changes.
+
+## Who Is Turnero For?
+
+Turnero is designed for clinic staff who need a lightweight but complete practice management tool:
+
+- **Clinic administrators** — manage doctors, configure available time slots, handle user accounts and role assignments, and export reports.
+- **Receptionists (Ingreso)** — register patients, book appointments, check patients in when they arrive, and view the live appointments board.
+- **Doctors (Medico)** — access the full medical record for each patient, record visit notes, log allergies, vaccinations, growth charts, permanent medications, perinatal backgrounds, and congenital conditions.
+
+## User Roles
+
+Turnero uses ASP.NET Core Identity with three named roles. Each role gates a distinct area of the application:
+
+| Role | Spanish name | Primary access |
+|------|-------------|----------------|
+| **Admin** | Administrador | User management, doctor management, time-slot configuration, role assignment |
+| **Medico** | Doctor | Patient records, visit history, clinical sub-modules (allergies, vaccines, growth charts, etc.) |
+| **Ingreso** | Reception | Appointment booking, patient check-in, live appointments board |
+
+A single user account can hold more than one role. Role assignment is performed by an Admin through the Administration panel.
+
+## Core Capabilities
+
+### Appointment Scheduling
+Staff can create, update, and cancel appointments via the `Turns` module. Each appointment links a patient name and DNI to a doctor (`Medic`) and a time slot (`TimeTurn`). An `Accessed` flag tracks whether the patient has arrived. A public booking endpoint (`TurnsPublicController`) lets patients self-schedule without logging in.
+
+### Real-Time Updates via SignalR
+The `TurnsTableHub` broadcasts appointment changes to all connected browsers over WebSockets. When a receptionist marks a patient as arrived, every other open session — including the doctor's screen — updates instantly without a page refresh.
+
+### Full Patient Medical Records
+The `Patients` module stores a rich longitudinal record per patient, with dedicated sub-modules maintained as separate controllers and service layers:
+
+- **Visits** — dated consultation notes
+- **Allergies** — categorised by allergen type and severity
+- **Personal & perinatal background** — family and birth history
+- **Permanent medications** — ongoing prescriptions
+- **Vaccines** — immunisation history with dose tracking
+- **Growth charts** — height/weight/BMI series
+- **Congenital conditions** — coded entries with occurrence and severity fields
+
+### Export to Excel & PDF
+ClosedXML generates `.xlsx` reports for appointment lists and patient data. QuestPDF (Community licence, configured at startup) produces printable PDF summaries of patient records.
+
+### Progressive Web App (PWA)
+Turnero ships with a service worker and web manifest, allowing it to be installed on desktop and mobile devices and receive desktop push notifications.
+
+## Technology Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Web framework | ASP.NET Core MVC 10, Razor Pages |
+| Database | PostgreSQL via Npgsql / EF Core |
+| Real-time | ASP.NET Core SignalR (JSON protocol) |
+| Authentication | ASP.NET Core Identity + Firebase JWT (optional) |
+| Object mapping | Mapster |
+| Excel export | ClosedXML 0.105 |
+| PDF generation | QuestPDF 2026.6 |
+| Front-end | Bootstrap, jQuery, JavaScript |
+| Caching | In-process `IMemoryCache` |
+| Compression | Brotli + Gzip response compression |
+
+## Architecture Overview
+
+Turnero follows a classic three-layer separation of concerns, expressed as four .NET projects inside the same solution:
+
+```
+Turnero/                  ← ASP.NET Core MVC host (controllers, views, hubs, Program.cs)
+Turnero.DAL/              ← Data Access Layer (EF Core DbContext, models, migrations, repositories)
+Turnero.SL/               ← Service Layer (business logic, interfaces, service implementations)
+Turnero.Utilities/        ← Shared helpers (Mapster config, AppSettings, etc.)
+```
+
+Controllers in the MVC host depend only on service interfaces declared in `Turnero.SL`. Those services depend on repository interfaces declared in `Turnero.DAL`. Concrete implementations are wired together in `Program.cs` via the built-in ASP.NET Core dependency injection container. This makes it straightforward to replace any single layer — for example, swapping PostgreSQL for a different provider — without touching the UI or business-logic code.
+
+<Tip>
+  A live demo of Turnero is available at [turnero.dev.ar](https://turnero.dev.ar), deployed automatically from the `master` branch via the included GitHub Actions pipeline.
+</Tip>
+
+## Explore the Docs
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Clone the repo, configure your database, apply migrations, and run the app locally in under ten minutes.
+  </Card>
+  <Card title="Deployment" icon="server" href="/deployment">
+    Set up the GitHub Actions CI/CD pipeline to ship to a Linux VPS automatically on every passing build.
+  </Card>
+  <Card title="Appointments" icon="calendar" href="/features/appointments">
+    Understand how turns, time slots, and the real-time SignalR board work together.
+  </Card>
+  <Card title="Patients" icon="user-doctor" href="/features/patients">
+    Explore the full patient record model and all clinical sub-modules.
+  </Card>
+</CardGroup>

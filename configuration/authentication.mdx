@@ -1,0 +1,169 @@
+---
+title: "Configure ASP.NET Identity Authentication in Turnero"
+sidebarTitle: "Authentication"
+description: "Set up ASP.NET Identity cookie auth and JWT bearer authentication in Turnero. Configure password policy, session lifetime, and authorization policies."
+---
+
+Turnero supports two parallel authentication schemes. Browser-based clinic staff log in through ASP.NET Identity's cookie mechanism, while mobile or API clients can authenticate with Firebase-issued JWT bearer tokens. Both schemes are registered in `Program.cs` and operate simultaneously — you do not need to enable both unless you are also using the Firebase integration.
+
+## Authentication Schemes
+
+### 1. Cookie-based ASP.NET Identity
+
+This is the primary scheme for all Razor-rendered pages. After a successful login at `/Identity/Account/Login`, ASP.NET Core issues an encrypted authentication cookie that travels with every subsequent browser request.
+
+The cookie is configured in `Program.cs` as follows:
+
+```csharp
+builder.Services.ConfigureApplicationCookie(options =>
+{
+    options.Cookie.HttpOnly        = true;
+    options.ExpireTimeSpan         = TimeSpan.FromDays(1);
+    options.LoginPath              = "/Identity/Account/Login";
+    options.LogoutPath             = "/Identity/Account/Login";
+    options.AccessDeniedPath       = "/Identity/Account/AccessDenied";
+    options.SlidingExpiration      = true;
+});
+```
+
+| Setting | Value | Effect |
+|---|---|---|
+| `HttpOnly` | `true` | Cookie is inaccessible to JavaScript, reducing XSS exposure |
+| `ExpireTimeSpan` | 1 day | Session window before the cookie expires |
+| `SlidingExpiration` | `true` | The expiry clock resets on each authenticated request |
+| `LoginPath` | `/Identity/Account/Login` | Unauthenticated requests are redirected here |
+
+### 2. JWT Bearer (Firebase)
+
+The second scheme handles API requests that carry a Firebase-issued ID token in the `Authorization: Bearer <token>` header. It is registered alongside the cookie scheme:
+
+```csharp
+builder.Services.AddAuthentication()
+    .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, jwtOptions =>
+    {
+        var validIssuer = builder.Configuration["Authentication:ValidIssuer"];
+        var audience    = builder.Configuration["Authentication:Audience"];
+
+        jwtOptions.Authority = validIssuer;
+        jwtOptions.Audience  = audience;
+        jwtOptions.TokenValidationParameters.ValidIssuer = validIssuer;
+    });
+```
+
+The three configuration keys that drive JWT validation must be supplied via user secrets or `appsettings.json`:
+
+| Key | Description |
+|---|---|
+| `Authentication:ValidIssuer` | Firebase project token issuer URL, e.g. `https://securetoken.google.com/<project-id>` |
+| `Authentication:Audience` | Your Firebase project ID (used as the expected `aud` claim) |
+| `Authentication:TokenUri` | Firebase REST sign-in endpoint (used as the `HttpClient` base address in `FirebaseService`) |
+
+#### Setting JWT keys via user secrets
+
+```bash
+dotnet user-secrets set "Authentication:ValidIssuer" "https://securetoken.google.com/your-project-id" --project Turnero
+dotnet user-secrets set "Authentication:Audience"    "your-project-id" --project Turnero
+dotnet user-secrets set "Authentication:TokenUri"    "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=YOUR_API_KEY" --project Turnero
+```
+
+Or as a single JSON block in the secrets file (`secrets.json`):
+
+```json
+{
+  "Authentication": {
+    "ValidIssuer": "https://securetoken.google.com/your-project-id",
+    "Audience":    "your-project-id",
+    "TokenUri":    "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=YOUR_API_KEY"
+  }
+}
+```
+
+## Password Policy
+
+The identity password requirements are intentionally relaxed to reduce friction for clinic staff:
+
+```csharp
+builder.Services.AddDefaultIdentity<IdentityUser>(options =>
+{
+    options.SignIn.RequireConfirmedAccount = false;
+    options.Password.RequireDigit           = true;
+    options.Password.RequireLowercase       = true;
+    options.Password.RequireNonAlphanumeric = false;
+    options.Password.RequireUppercase       = false;
+    options.Password.RequiredLength         = 6;
+    options.Password.RequiredUniqueChars    = 0;
+})
+.AddRoles<IdentityRole>()
+.AddEntityFrameworkStores<ApplicationDbContext>();
+```
+
+| Rule | Enforced |
+|---|---|
+| At least one digit | ✅ Yes |
+| At least one lowercase letter | ✅ Yes |
+| At least one uppercase letter | ❌ No |
+| At least one non-alphanumeric character | ❌ No |
+| Minimum length | 6 characters |
+| Minimum unique characters | None |
+
+<Warning>
+  For deployments accessible from the internet, consider raising `RequiredLength` to 8 or 10 and enabling `RequireUppercase` and `RequireNonAlphanumeric` to reduce brute-force risk.
+</Warning>
+
+## Session Configuration
+
+Server-side session state is enabled alongside cookie authentication and shares the same one-day idle window:
+
+```csharp
+builder.Services.AddSession(options =>
+{
+    options.IdleTimeout        = TimeSpan.FromDays(1);
+    options.Cookie.HttpOnly    = true;
+    options.Cookie.IsEssential = true;
+});
+```
+
+`IsEssential = true` exempts the session cookie from GDPR consent checks, ensuring appointment workflows are never interrupted by cookie-consent banners.
+
+## Global Authorization Policy
+
+All MVC controllers require an authenticated user by default. This is enforced via a global `AuthorizeFilter` applied during service registration:
+
+```csharp
+builder.Services.AddControllersWithViews(options =>
+{
+    var policy = new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+    options.Filters.Add(new AuthorizeFilter(policy));
+});
+```
+
+Any controller action that should be reachable without authentication — such as the Firebase API endpoints — must explicitly carry the `[AllowAnonymous]` attribute.
+
+## Authorization Policies
+
+One named policy is defined beyond the global authentication requirement:
+
+```csharp
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy("DeleteRolePolicy", policy => policy.RequireClaim("Delete Role"));
+```
+
+A user must have a `"Delete Role"` claim in their identity to access actions decorated with `[Authorize(Policy = "DeleteRolePolicy")]`. Assign this claim through ASP.NET Identity's `UserManager.AddClaimAsync` or the administration UI.
+
+## Identity Pages
+
+Turnero uses the scaffolded Razor Pages provided by `Microsoft.AspNetCore.Identity.UI`. The relevant routes are:
+
+| Route | Purpose |
+|---|---|
+| `/Identity/Account/Login` | Sign-in page (also the redirect target for unauthenticated requests) |
+| `/Identity/Account/Register` | New account registration |
+| `/Identity/Account/ForgotPassword` | Password reset request |
+| `/Identity/Account/Manage/*` | Profile and password management |
+| `/Identity/Account/AccessDenied` | Shown when a user lacks the required role or claim |
+
+<Note>
+  `RequireConfirmedAccount` is set to `false`, so newly registered accounts can log in immediately without completing an email confirmation step. Enable it and configure an email sender if your deployment requires email verification.
+</Note>

@@ -1,0 +1,250 @@
+---
+title: "Medic, User Models, and Application DbContext"
+sidebarTitle: "Medic"
+description: "Reference for Medic, MedicDto, user administration view models, RolesConstants, ClaimsStore, and the ApplicationDbContext entity sets used in Turnero."
+---
+
+The `Medic` entity links an ASP.NET Identity user to the appointment scheduling system. User administration view models (`EditRoleViewModel`, `UserClaimsViewModel`, etc.) are used exclusively by the `AdministrationController` to manage roles and claims. This page also documents the `ApplicationDbContext` entity set registrations and the static `RolesConstants` and `ClaimsStore` types.
+
+---
+
+## Medic
+
+`Medic` represents a doctor registered in the system. The `UserGuid` field links the record to the corresponding `IdentityUser.Id`, enabling SignalR to route appointment notifications directly to that doctor's browser session.
+
+```csharp
+public class Medic
+{
+    [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+    public Guid Id { get; set; }
+    [Display(Name = "Nombre")]
+    public string? Name { get; set; }
+    [Display(Name = "Usuario")]
+    public string? UserGuid { get; set; }
+    public ICollection<Turn>? Turns { get; set; }
+    public ICollection<Visit>? Visits { get; set; }
+}
+```
+
+<ResponseField name="Id" type="Guid">
+  Primary key. Database-generated identity.
+</ResponseField>
+
+<ResponseField name="Name" type="string?">
+  The doctor's display name. Shown in appointment dropdowns and DataTables columns.
+</ResponseField>
+
+<ResponseField name="UserGuid" type="string?">
+  The `Id` of the linked `IdentityUser`. Used by `TurnsController` and `VisitsController` to send directed SignalR notifications: `hubContext.Clients.User(medic.UserGuid).SendAsync(...)`.
+</ResponseField>
+
+<ResponseField name="Turns" type="ICollection<Turn>?">
+  Reverse navigation. All `Turn` records assigned to this medic.
+</ResponseField>
+
+<ResponseField name="Visits" type="ICollection<Visit>?">
+  Reverse navigation. All `Visit` records created by this medic.
+</ResponseField>
+
+### MedicDto
+
+Lightweight projection used in dropdown `SelectList` bindings and the in-memory cache.
+
+```csharp
+public class MedicDto
+{
+    public Guid? Id { get; set; }
+    [Display(Name = "Nombre")]
+    public string? Name { get; set; }
+}
+```
+
+<Note>
+`MedicDto` records are cached at application startup under the key `"medics"` using `IMemoryCache`. Cache is refreshed by calling `medicsRepository.GetCachedMedics()`. A restart is required to pick up new or deleted medic records if the cache is stale.
+</Note>
+
+---
+
+## RolesConstants
+
+Static string constants defining the three built-in role names.
+
+```csharp
+public static class RolesConstants
+{
+    public const string Ingreso = "Ingreso";
+    public const string Medico  = "Medico";
+    public const string Admin   = "Admin";
+}
+```
+
+| Constant | String Value | Purpose |
+|---|---|---|
+| `Ingreso` | `"Ingreso"` | Reception staff — create, edit, and delete appointments |
+| `Medico` | `"Medico"` | Doctors — manage patient records, mark patients as arrived |
+| `Admin` | `"Admin"` | Administrators — manage users, roles, medics, and time slots |
+
+These constants are used throughout `[Authorize(Roles = ...)]` attributes on controller actions.
+
+---
+
+## ClaimsStore
+
+Defines the three predefined claims that can be granted to individual users via `GET/POST /Administration/ManageUserClaims`.
+
+```csharp
+public static class ClaimsStore
+{
+    public static readonly List<Claim> AllClaims =
+    [
+        new Claim("Create Role", "Create Role"),
+        new Claim("Edit Role",   "Edit Role"),
+        new Claim("Delete Role", "Delete Role"),
+    ];
+}
+```
+
+| Claim Type | Purpose |
+|---|---|
+| `Create Role` | Allows the user to create new roles |
+| `Edit Role` | Allows the user to edit existing roles |
+| `Delete Role` | Required by the `DeleteRolePolicy` authorization policy |
+
+The `DeleteRolePolicy` is registered in `Program.cs` as:
+
+```csharp
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy("DeleteRolePolicy", policy => policy.RequireClaim("Delete Role"));
+```
+
+---
+
+## AppSettings
+
+Static class holding the connection string value set at startup.
+
+```csharp
+public static class AppSettings
+{
+    public static string? ConnectionString { get; set; }
+}
+```
+
+Set in `Program.cs` before `DbContext` registration:
+
+```csharp
+AppSettings.ConnectionString = builder.Configuration
+    .GetConnectionString("LocalConnection");
+```
+
+---
+
+## User Administration View Models
+
+These models are used exclusively by `AdministrationController` for rendering and processing user/role management forms.
+
+### EditRoleViewModel
+
+```csharp
+public class EditRoleViewModel
+{
+    public string? Id { get; set; }
+    [Required(ErrorMessage = "Role Name is required")]
+    public string? RoleName { get; set; }
+    public List<string> Users { get; set; }
+}
+```
+
+| Field | Description |
+|---|---|
+| `Id` | The `IdentityRole.Id` string |
+| `RoleName` | The role's display name |
+| `Users` | List of usernames currently in this role |
+
+### EditUserViewModel
+
+```csharp
+public class EditUserViewModel
+{
+    public string Id { get; set; }
+    [Required] public string UserName { get; set; }
+    [Required, EmailAddress] public string Email { get; set; }
+    public List<string> Claims { get; set; }
+    public IList<string> Roles { get; set; }
+}
+```
+
+### UserClaimsViewModel
+
+```csharp
+public class UserClaimsViewModel
+{
+    public string UserId { get; set; }
+    public List<UserClaim> Claims { get; set; }
+}
+
+public class UserClaim
+{
+    public string? ClaimType { get; set; }
+    public bool IsSelected { get; set; }
+}
+```
+
+Submitted to `POST /Administration/ManageUserClaims`. The handler removes all existing claims from the user and then re-adds only those where `IsSelected == true`.
+
+### UserRoleViewModel
+
+```csharp
+public class UserRoleViewModel
+{
+    public string? UserId { get; set; }
+    public string? UserName { get; set; }
+    public bool IsSelected { get; set; }
+}
+```
+
+Used in `GET/POST /Administration/EditUsersInRole/{roleId}` to render a checkbox list of all users, marking those already in the role.
+
+---
+
+## ApplicationDbContext
+
+`ApplicationDbContext` inherits from `IdentityDbContext` (providing all ASP.NET Identity tables) and registers the following entity sets:
+
+```csharp
+public class ApplicationDbContext : IdentityDbContext
+{
+    public DbSet<Turn>               Turns              { get; set; }
+    public DbSet<Medic>              Medics             { get; set; }
+    public DbSet<TimeTurn>           TimeTurns          { get; set; }
+    public DbSet<Patient>            Patients           { get; set; }
+    public DbSet<ContactInfo>        ContactInfo        { get; set; }
+    public DbSet<Allergies>          Allergies          { get; set; }
+    public DbSet<Visit>              Visits             { get; set; }
+    public DbSet<ParentsData>        ParentsData        { get; set; }
+    public DbSet<PersonalBackground> PersonalBackground { get; set; }
+    public DbSet<PerinatalBackground>PerinatalBackground{ get; set; }
+    public DbSet<Vaccines>           Vaccines           { get; set; }
+    public DbSet<PermMed>            PermMeds           { get; set; }
+    public DbSet<GrowthChart>        GrowthCharts       { get; set; }
+    public DbSet<CongErrors>         CongErrors         { get; set; }
+}
+```
+
+### OnModelCreating Configuration
+
+`ApplicationDbContext.OnModelCreating` applies the following conventions:
+
+| Entity | Column | Configuration |
+|---|---|---|
+| `Turn.DateTurn` | `date` | `HasColumnType("date")` |
+| `Patient.BirthDate` | `date` | `HasColumnType("date")` |
+| `Visit.VisitDate` | `date` | `HasColumnType("date")` |
+| `Allergies` (date props) | `date` | `HasColumnType("date"), HasDefaultValue(null)` |
+| `Visit` (string props) | `varchar` | `HasDefaultValue("")` |
+| `PersonalBackground` (bool props) | `boolean` | `HasDefaultValue(false)` |
+| `ParentsData` (string props) | `varchar` | `HasDefaultValue("")` |
+| `ParentsData` (date props) | `date` | `HasDefaultValue(DateOnly.MinValue)` |
+| `ParentsData` (int props) | `integer` | `HasDefaultValue(0)` |
+| `CongErrors` (string props) | `varchar` | `HasDefaultValue("")` |
+| `PerinatalBackground` (int props) | `integer` | `HasDefaultValue(0)` |

@@ -1,0 +1,150 @@
+---
+title: "Managing Users, Roles, and Claims in Turnero"
+sidebarTitle: "Users & Roles"
+description: "Create and assign roles in Turnero, manage user claims, and control feature access with Admin, Medico, and Ingreso role-based permissions."
+---
+
+Turnero uses ASP.NET Core Identity to secure every part of the application. Three built-in roles — `Admin`, `Medico`, and `Ingreso` — map to the distinct responsibilities of clinic staff. An administrator controls who can access the system and what they can do; reception staff book and manage appointments; and doctors interact with patient records and mark arrivals. All routes under the `Administration` and `Role` controllers are guarded by the `Admin` role, so only a user holding that role can manage other users, create roles, or assign claims.
+
+## Built-in Roles
+
+Turnero defines its three roles as constants in `RolesConstants`:
+
+```csharp
+public static class RolesConstants
+{
+    public const string Ingreso = "Ingreso";
+    public const string Medico  = "Medico";
+    public const string Admin   = "Admin";
+}
+```
+
+### Role / Permission Matrix
+
+| Permission | Admin | Medico | Ingreso |
+|---|:---:|:---:|:---:|
+| Manage users, roles & claims | ✅ | ❌ | ❌ |
+| Register new users | ✅ | ❌ | ❌ |
+| Manage medic records | ✅ | ❌ | ❌ |
+| Manage time slots | ✅ | ❌ | ❌ |
+| Create / edit / delete appointments | ✅ | ❌ | ✅ |
+| View appointment list | ✅ | ✅ | ✅ |
+| Access patient records & medical data | ✅ | ✅ | ❌ |
+| Mark patient as arrived | ✅ | ✅ | ❌ |
+
+<Tip>
+  The `Register` page (`/Identity/Account/Register`) is itself restricted to the `Admin` role. Only an existing administrator can create new user accounts and assign them a role during registration.
+</Tip>
+
+<Note>
+  The very first user in a fresh installation cannot be promoted through the UI — there is no administrator yet. Promote the first user to `Admin` by seeding the role and the `AspNetUserRoles` mapping directly in the database, or by writing a one-time startup seed method in `Program.cs`.
+</Note>
+
+---
+
+## Listing Users
+
+Navigate to **GET `/Administration/ListUsers`** to see every registered `IdentityUser` in the system. From this page you can open any user's edit form or delete a user entirely via **POST `/Administration/DeleteUser`**.
+
+---
+
+## Creating a Role
+
+<Steps>
+  <Step title="Open the Create Role form">
+    Navigate to **GET `/Role/Create`**. A blank `IdentityRole` form is displayed.
+  </Step>
+  <Step title="Enter the role name">
+    Type the role name into the **Name** field. Role names are case-sensitive; use the exact casing from `RolesConstants` (`Admin`, `Medico`, `Ingreso`) for the built-in roles.
+  </Step>
+  <Step title="Save the role">
+    Submit the form to **POST `/Role/Create`**. The controller calls `roleManager.CreateAsync(role)` and redirects to the role index at `/Role/Index`.
+  </Step>
+</Steps>
+
+You can also create and manage roles from within the Administration area via **GET/POST `/Administration/CreateRole`** and **GET/POST `/Administration/EditRole/{id}`**. The `EditRoleViewModel` exposes the role's `Id`, its `RoleName`, and a `List<string> Users` that shows every username currently assigned to that role.
+
+---
+
+## Assigning Users to a Role
+
+<Steps>
+  <Step title="Open the EditUsersInRole form">
+    Navigate to **GET `/Administration/EditUsersInRole?roleId={roleId}`**. The view renders a checklist of every user in the system, with those already in the role pre-checked. Each row is backed by a `UserRoleViewModel`:
+
+    ```csharp
+    public class UserRoleViewModel
+    {
+        public string? UserId   { get; set; }
+        public string? UserName { get; set; }
+        public bool    IsSelected { get; set; }
+    }
+    ```
+  </Step>
+  <Step title="Toggle user membership">
+    Check users you want to add to the role and uncheck users you want to remove.
+  </Step>
+  <Step title="Save changes">
+    Submit the form to **POST `/Administration/EditUsersInRole?roleId={roleId}`**. The controller iterates the posted `List<UserRoleViewModel>` and calls `userManager.AddToRoleAsync` or `userManager.RemoveFromRoleAsync` for each changed entry, then redirects back to `EditRole`.
+  </Step>
+</Steps>
+
+---
+
+## Editing a User
+
+Navigate to **GET `/Administration/EditUser/{id}`** to load a user's profile. The view model exposes:
+
+| Field | Description |
+|---|---|
+| `Id` | The Identity user ID (read-only) |
+| `Email` | The user's email address |
+| `UserName` | The user's login name |
+| `Roles` | Current role assignments (read-only display) |
+| `Claims` | Current claim values (read-only display) |
+
+Submit the form to **POST `/Administration/EditUser`** to persist changes. Only `Email` and `UserName` are writable through this form; role and claim changes use their dedicated screens.
+
+<Warning>
+  Changing a user's `UserName` or `Email` here does **not** automatically update the linked `Medic.UserGuid` association or the Firebase authentication record. Update those separately if required.
+</Warning>
+
+---
+
+## Managing User Claims
+
+Turnero defines three fine-grained claims in `ClaimsStore` that can supplement role-based access for role administration tasks:
+
+```csharp
+public static class ClaimsStore
+{
+    public static readonly List<Claim> AllClaims =
+    [
+        new Claim("Create Role", "Create Role"),
+        new Claim("Edit Role",   "Edit Role"),
+        new Claim("Delete Role", "Delete Role"),
+    ];
+}
+```
+
+| Claim | Purpose |
+|---|---|
+| `Create Role` | Grants the ability to create new Identity roles |
+| `Edit Role` | Grants the ability to rename existing roles |
+| `Delete Role` | Grants the ability to delete roles |
+
+<Steps>
+  <Step title="Open the ManageUserClaims form">
+    Navigate to **GET `/Administration/ManageUserClaims?userId={userId}`**. The view loads the `UserClaimsViewModel`, which contains the user's ID and the full list of available claims with each one marked selected or unselected based on what the user already holds.
+  </Step>
+  <Step title="Toggle claims">
+    Check the claims you want to grant to this user.
+  </Step>
+  <Step title="Save">
+    Submit to **POST `/Administration/ManageUserClaims`**. The controller removes all existing claims and then re-adds only the selected ones using `userManager.AddClaimsAsync`. On success the user is redirected to the `EditUser` view for the same user.
+  </Step>
+</Steps>
+
+<Note>
+  Claims are additive on top of roles. A user with the `Ingreso` role who also holds the `Create Role` claim will be able to create roles, even though `Ingreso` alone does not grant that capability.
+</Note>

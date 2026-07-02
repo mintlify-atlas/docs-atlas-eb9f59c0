@@ -1,0 +1,188 @@
+---
+title: "Integrate Firebase Authentication with Turnero"
+sidebarTitle: "Firebase"
+description: "Set up Firebase Admin SDK and Firebase Authentication in Turnero to enable JWT-based login alongside ASP.NET Identity cookie auth."
+---
+
+Firebase integration in Turnero is entirely optional. The application starts and operates normally without it — clinic staff can register and log in using the standard ASP.NET Identity cookie flow. When Firebase is configured, it adds a second authentication path: API clients can obtain a Firebase-issued JWT and call the `/api/Firebase` endpoints to register or sign in programmatically. The Firebase Admin SDK is also used server-side to create user records in the Firebase project and to send email verification and password-reset links.
+
+## How Firebase Initialisation Works
+
+During startup, Turnero looks for a `firebase.json` service-account file at a well-known path derived from the `secretsFolder` key in `appsettings.json`:
+
+```csharp
+string firebasePath = GetFirebasePath(builder.Configuration["secretsFolder"]);
+
+static string GetFirebasePath(string secretsFolder)
+{
+    return RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                      "Microsoft", "UserSecrets", secretsFolder, "firebase.json")
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                      ".microsoft", "usersecrets", secretsFolder, "firebase.json");
+}
+
+// Firebase is only initialized when the file is present
+if (File.Exists(firebasePath))
+{
+    FirebaseApp.Create(new AppOptions
+    {
+        Credential = GoogleCredential.FromFile(firebasePath)
+    });
+}
+```
+
+The default `secretsFolder` value shipped in `appsettings.json` is `aspnet-Turnero-1D8EA02B-D124-439A-B5F8-DE2044EFFABA`. You can override it by setting the `secretsFolder` key in your environment's `appsettings.json`.
+
+### Service account file locations
+
+| Operating System | Path |
+|---|---|
+| Windows | `%APPDATA%\Microsoft\UserSecrets\aspnet-Turnero-1D8EA02B-D124-439A-B5F8-DE2044EFFABA\firebase.json` |
+| Linux / macOS | `~/.microsoft/usersecrets/aspnet-Turnero-1D8EA02B-D124-439A-B5F8-DE2044EFFABA/firebase.json` |
+
+<Note>
+  Placing the file inside the user-secrets directory keeps it out of your project tree and away from source control. Never commit a service account JSON file to a repository.
+</Note>
+
+## Setup Steps
+
+<Steps>
+  <Step title="Create a Firebase project">
+    Go to [console.firebase.google.com](https://console.firebase.google.com), create a new project, and enable the **Authentication** product with the **Email/Password** sign-in provider.
+  </Step>
+  <Step title="Generate a service account key">
+    In the Firebase console, navigate to **Project Settings → Service accounts → Generate new private key**. Download the resulting JSON file.
+  </Step>
+  <Step title="Place the service account file">
+    Copy the downloaded JSON file to the path shown in the table above, renaming it to `firebase.json`.
+
+    <CodeGroup>
+      ```bash Windows (PowerShell)
+      $dest = "$env:APPDATA\Microsoft\UserSecrets\aspnet-Turnero-1D8EA02B-D124-439A-B5F8-DE2044EFFABA"
+      New-Item -ItemType Directory -Force -Path $dest
+      Copy-Item .\your-service-account.json "$dest\firebase.json"
+      ```
+
+      ```bash Linux / macOS
+      DEST="$HOME/.microsoft/usersecrets/aspnet-Turnero-1D8EA02B-D124-439A-B5F8-DE2044EFFABA"
+      mkdir -p "$DEST"
+      cp ./your-service-account.json "$DEST/firebase.json"
+      ```
+    </CodeGroup>
+  </Step>
+  <Step title="Set JWT authentication keys">
+    Configure the three authentication keys so the JWT bearer middleware can validate Firebase-issued tokens:
+
+    ```bash
+    dotnet user-secrets set "Authentication:ValidIssuer" \
+      "https://securetoken.google.com/your-project-id" --project Turnero
+
+    dotnet user-secrets set "Authentication:Audience" \
+      "your-project-id" --project Turnero
+
+    dotnet user-secrets set "Authentication:TokenUri" \
+      "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=YOUR_WEB_API_KEY" \
+      --project Turnero
+    ```
+
+    Find your **Web API Key** on the Firebase console under **Project Settings → General**.
+  </Step>
+  <Step title="Restart the application">
+    Stop and restart Turnero. If the `firebase.json` file is found, you will see `FirebaseApp` initialise without errors in the startup logs.
+  </Step>
+</Steps>
+
+## API Endpoints
+
+The `FirebaseController` exposes two `[AllowAnonymous]` endpoints that are reachable even under the global `AuthorizeFilter`:
+
+### POST /api/Firebase/register
+
+Registers a new user in both Firebase Authentication and ASP.NET Identity. The username determines the role automatically: `Administrador` → Admin, `Ingreso` / `IngresoPruebas` → Ingreso, everything else → Medico.
+
+**Request body** (`UserFirebaseDTO`):
+
+```json
+{
+  "name":     "DrSmith",
+  "email":    "smith@clinic.example",
+  "password": "secret123"
+}
+```
+
+**Response**: a Firebase `UserRecord` object containing the new user's UID, email, and display name.
+
+### POST /api/Firebase/login
+
+Exchanges email and password for a Firebase ID token by calling the Firebase REST sign-in endpoint (configured via `Authentication:TokenUri`).
+
+**Request body** (`UserLoginRequestDTO`):
+
+```json
+{
+  "email":    "smith@clinic.example",
+  "password": "secret123"
+}
+```
+
+**Response** (`AuthFirebase`):
+
+```json
+{
+  "kind":         "identitytoolkit#VerifyPasswordResponse",
+  "localId":      "uid-abc123",
+  "email":        "smith@clinic.example",
+  "displayName":  "DrSmith",
+  "idToken":      "<Firebase JWT>",
+  "registered":   true,
+  "refreshToken": "<refresh token>",
+  "expiresIn":    3600
+}
+```
+
+Pass the `idToken` value as `Authorization: Bearer <idToken>` on subsequent API requests to endpoints that require the JWT bearer scheme.
+
+<Warning>
+  The `/api/Firebase/register` and `/api/Firebase/login` routes are independent from the Razor-based identity pages at `/Identity/Account/Register` and `/Identity/Account/Login`. A user registered through the API exists in both Firebase and ASP.NET Identity; a user registered through the Razor pages exists only in ASP.NET Identity and cannot use Firebase token-based login unless also created in Firebase.
+</Warning>
+
+## Data Models
+
+### UserFirebaseDTO
+
+```csharp
+public class UserFirebaseDTO
+{
+    public string? Name     { get; set; }
+    public string? Email    { get; set; }
+    public string? Password { get; set; }
+    public string? Role     { get; set; }
+}
+```
+
+### UserLoginRequestDTO
+
+```csharp
+public class UserLoginRequestDTO
+{
+    public string? Email    { get; set; }
+    public string? Password { get; set; }
+}
+```
+
+### AuthFirebase (login response)
+
+```csharp
+public class AuthFirebase
+{
+    public string? Kind         { get; set; }
+    public string? LocalId      { get; set; }
+    public string? Email        { get; set; }
+    public string? DisplayName  { get; set; }
+    public string? IdToken      { get; set; }
+    public bool    Registered   { get; set; }
+    public string? RefreshToken { get; set; }
+    public long    ExpiresIn    { get; set; }
+}
+```

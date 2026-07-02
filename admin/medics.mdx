@@ -1,0 +1,151 @@
+---
+title: "Registering and Configuring Doctors (Medics)"
+sidebarTitle: "Medics"
+description: "Register doctors in Turnero, link them to their Identity user account, and manage their profiles so they appear in the appointment scheduling interface."
+---
+
+A **Medic** record is the bridge between an ASP.NET Identity user and a doctor who appears in the appointment booking interface. Creating an Identity account gives someone the ability to log in; creating the corresponding Medic record is what makes that person selectable when scheduling appointments and what enables the real-time SignalR notification system to route alerts directly to their browser session. Both pieces must be in place before the doctor can fully participate in the system.
+
+## The Medic Model
+
+```csharp
+public class Medic
+{
+    [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+    public Guid    Id       { get; set; }
+    public string? Name     { get; set; }    // Doctor's display name
+    public string? UserGuid { get; set; }    // IdentityUser.Id
+
+    public ICollection<Turn>?  Turns  { get; set; }
+    public ICollection<Visit>? Visits { get; set; }
+}
+```
+
+| Field | Type | Purpose |
+|---|---|---|
+| `Id` | `Guid` (auto-generated) | Primary key for the Medic record |
+| `Name` | `string` | Display name shown in appointment dropdowns |
+| `UserGuid` | `string` | The `IdentityUser.Id` of the doctor's login account |
+| `Turns` | Navigation | Appointments associated with this doctor |
+| `Visits` | Navigation | Visit/medical records associated with this doctor |
+
+### Why the UserGuid Link Matters
+
+When an appointment is updated, Turnero uses SignalR to push a real-time notification to the affected doctor's browser. The hub method `UpdateTableDirected` targets a specific connected client by calling `Clients.User(medic.UserGuid)`, which matches the SignalR user identifier against the doctor's ASP.NET Identity ID. If `UserGuid` is blank or points to the wrong user, that doctor will never receive live appointment alerts.
+
+```csharp
+// TurnsController.cs — sending a directed SignalR notification
+await hubContext.Clients
+    .User(medic.UserGuid)
+    .SendAsync("UpdateTableDirected", medic.Name, turnMsj, t.DateTurn.ToShortDateString());
+```
+
+### The MedicDto Projection
+
+Appointment and dropdown views use a lightweight projection rather than the full entity to avoid loading navigation properties unnecessarily:
+
+```csharp
+public class MedicDto
+{
+    public Guid?   Id   { get; set; }
+    public string? Name { get; set; }
+}
+```
+
+`MedicDto` is what populates the doctor dropdown in the appointment booking form, and it is the type returned by `GetCachedMedics()`.
+
+---
+
+## Caching
+
+Medic records are loaded from the database once at application startup and stored in memory via `GetCachedMedics()`. Subsequent requests for the medic list — such as those made by the appointment create and edit forms — read from this in-memory cache rather than hitting the database on every call.
+
+```csharp
+// Program.cs — cache warm-up at startup
+await medicsRepository.GetCachedMedics();
+```
+
+<Note>
+  Because the list is cached, a newly created or edited Medic record may not appear in appointment dropdowns until the application is restarted. In development, restart the app after adding a new medic to see the change reflected immediately.
+</Note>
+
+---
+
+## Prerequisites
+
+Before creating a Medic record, two steps must be completed:
+
+<Steps>
+  <Step title="Register the user account">
+    An administrator must register the doctor's login account via the **Register** page (`/Identity/Account/Register`). The registration form requires an email, username, password, and role selection.
+  </Step>
+  <Step title="Assign the Medico role">
+    The newly registered user must be assigned the `Medico` role. The Create Medic form queries `userManager.GetUsersInRoleAsync("Medico")` to populate its dropdown — users who are not in the `Medico` role will not appear as options.
+  </Step>
+</Steps>
+
+<Warning>
+  If you create a Medic record but the linked user is later removed from the `Medico` role, that doctor will no longer appear as an option in the appointment dropdown for new bookings, even though their `Medic` record still exists.
+</Warning>
+
+---
+
+## Creating a Medic
+
+<Steps>
+  <Step title="Open the Create form">
+    Navigate to **GET `/Medics/CreateAsync`**. The controller calls `userManager.GetUsersInRoleAsync("Medico")` and populates a `ViewBag.User` dropdown with all users in the `Medico` role. A placeholder entry labelled "Seleccione..." is inserted at position zero.
+  </Step>
+  <Step title="Fill in the medic details">
+    Enter the doctor's **Name** (their display name throughout the system) and select the corresponding **User** from the dropdown. The selected user's `IdentityUser.Id` is stored as `UserGuid`.
+  </Step>
+  <Step title="Save the record">
+    Submit the form to **POST `/Medics/Create`**. On a valid model the controller calls `insertMedicServices.Create(medic)` and redirects to the medic index at `/Medics/Index`.
+  </Step>
+</Steps>
+
+---
+
+## Editing a Medic
+
+Navigate to **GET `/Medics/Edit/{id}`** to load the existing record. Submit changes to **POST `/Medics/Edit`**. The controller verifies the record exists via `MedicExists(medic.Id)` before calling `updateMedicServices.Update(medic)`.
+
+<Note>
+  If you need to relink a medic to a different Identity user (for example, after recreating a login account), update the `UserGuid` field to the new user's `IdentityUser.Id`. The SignalR notifications will then route to the new account's browser session.
+</Note>
+
+---
+
+## Deleting a Medic
+
+<Steps>
+  <Step title="Open the confirmation page">
+    Navigate to **GET `/Medics/Delete/{id}`** to load the record and display the deletion confirmation view.
+  </Step>
+  <Step title="Confirm the deletion">
+    Submit to **POST `/Medics/Delete`** (action name `Delete`, mapped to `DeleteConfirmed`). The controller calls `updateMedicServices.Delete(medic)` and redirects to the index.
+  </Step>
+</Steps>
+
+<Warning>
+  Deleting a Medic record does **not** cascade-delete the associated `Turn` (appointment) or `Visit` records. Those rows retain their `MedicId` foreign key but the doctor will no longer appear in the booking dropdown for new appointments. Additionally, any pending SignalR notifications targeting the deleted medic's `UserGuid` will have no connected client to deliver to.
+</Warning>
+
+---
+
+## All Medic Routes at a Glance
+
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/Medics/Index` | List all medic records |
+| `GET` | `/Medics/Details/{id}` | View a single medic's details |
+| `GET` | `/Medics/CreateAsync` | Show the create form (loads Medico-role users) |
+| `POST` | `/Medics/Create` | Save a new medic record |
+| `GET` | `/Medics/Edit/{id}` | Show the edit form for an existing medic |
+| `POST` | `/Medics/Edit` | Save changes to an existing medic |
+| `GET` | `/Medics/Delete/{id}` | Show the deletion confirmation page |
+| `POST` | `/Medics/Delete` | Confirm and delete the medic record |
+
+<Note>
+  All routes under `/Medics/` require the `Admin` role. Doctors themselves cannot edit or delete their own medic records.
+</Note>

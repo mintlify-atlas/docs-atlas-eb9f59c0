@@ -1,0 +1,349 @@
+---
+title: "Turns Controller: Appointment Scheduling Endpoints"
+sidebarTitle: "Turns"
+description: "Complete reference for all TurnsController and TurnsPublicController endpoints — appointment CRUD, DataTables integration, export, and public walk-in booking."
+---
+
+The `TurnsController` is the primary surface for managing clinic appointments in Turnero. It handles the full lifecycle of a turn (appointment): creating, listing, editing, marking as accessed, and deleting records. The controller is backed by a suite of injected services for data access and uses a SignalR hub (`TurnsTableHub`) to push real-time table updates to connected browsers. A companion `TurnsPublicController` exposes an unauthenticated booking page that lets walk-in patients register themselves for a same-day appointment without requiring a staff login.
+
+## Endpoint summary
+
+| Method | Path | Roles | Description |
+|--------|------|-------|-------------|
+| `GET` | `/Turns/Index` | Ingreso, Medico | Appointment list page |
+| `POST` | `/Turns/InitializeTurns` | Ingreso, Medico | DataTables server-side data feed |
+| `GET` | `/Turns/Create` | Ingreso, Medico | Returns `_Create` partial view |
+| `POST` | `/Turns/Create` | Ingreso, Medico | Inserts a new turn |
+| `GET` | `/Turns/Edit/{id}` | Ingreso | Returns `_Edit` partial view |
+| `PUT` | `/Turns/Edit` | Ingreso | Updates an existing turn |
+| `DELETE` | `/Turns/Delete/{id}` | Admin, Ingreso | Deletes a turn |
+| `POST` | `/Turns/Accessed/{id}` | Medico | Marks turn as accessed by doctor |
+| `POST` | `/Turns/CheckTurn` | Admin, Ingreso | Checks slot availability |
+| `POST` | `/Turns/ExportExcel` | Ingreso, Medico | Downloads current view as `.xlsx` |
+| `POST` | `/Turns/ExportPdf` | Ingreso, Medico | Downloads current view as `.pdf` |
+| `GET` | `/TurnsPublic/Index` | Anonymous | Public walk-in booking page |
+| `POST` | `/TurnsPublic/Create` | Anonymous | Submits a public walk-in turn |
+
+---
+
+## GET /Turns/Index
+
+Renders the main appointment management view. When the authenticated user is a doctor (has a corresponding `Medic` record linked by ASP.NET Core Identity user ID), the controller sets `ViewBag.MedicId` to that doctor's `Guid` so the front-end table filters automatically to their own appointments. A cached list of all medics is loaded into `ViewBag.Medics` as a `SelectList` for the filter dropdown.
+
+**Required roles:** `Ingreso`, `Medico`
+
+**Response:** HTML view `Index`
+
+---
+
+## POST /Turns/InitializeTurns
+
+Server-side DataTables endpoint. The controller reads pagination, search, and sorting parameters from the POST form body and returns the matching page of `TurnDTO` records as JSON. When the authenticated user has a linked `Medic` record, the `medicId` filter is locked to that doctor's ID regardless of form input. Each returned `TurnDTO` has its `IsMedic` flag set based on whether the caller is a doctor.
+
+**Required roles:** `Ingreso`, `Medico`
+
+**Request** — `application/x-www-form-urlencoded`
+
+<ParamField body="draw" type="string" required>
+  DataTables draw counter; echoed back unchanged in the response so the client can match async responses.
+</ParamField>
+
+<ParamField body="start" type="integer" required>
+  Zero-based index of the first record to return. Used for offset-based pagination.
+</ParamField>
+
+<ParamField body="length" type="integer" required>
+  Number of records per page. Pass `-1` to return all records without pagination.
+</ParamField>
+
+<ParamField body="search[value]" type="string">
+  Global search term. Currently used as a pass-through; column-level filters are the primary search mechanism.
+</ParamField>
+
+<ParamField body="Columns[5][search][value]" type="string (GUID)">
+  Filters appointments by medic. Must be a valid `Guid` corresponding to a `Medic.Id`. Ignored when the caller is themselves a doctor — the server substitutes the caller's own medic ID.
+</ParamField>
+
+<ParamField body="Columns[6][search][value]" type="string (date)">
+  Filters by appointment date. Accepts any string parseable by `DateOnly.TryParse`. Defaults to today when absent or unparseable.
+</ParamField>
+
+<ParamField body="order[0][column]" type="integer">
+  Zero-based index of the column to sort by.
+</ParamField>
+
+<ParamField body="order[0][dir]" type="string">
+  Sort direction: `asc` or `desc`.
+</ParamField>
+
+**Response** — `200 OK`, `application/json`
+
+```json
+{
+  "draw": "1",
+  "recordsFiltered": 14,
+  "recordsTotal": 14,
+  "data": [
+    {
+      "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      "name": "María García",
+      "dni": 30123456,
+      "medicId": "a1b2c3d4-1234-5678-abcd-ef0123456789",
+      "medicName": "Dr. López",
+      "date": "15/06/2025",
+      "time": "09:00",
+      "timeId": "78496444-276d-4389-8b2f-f668c5350e3f",
+      "socialWork": "OSDE",
+      "reason": "Control",
+      "accessed": false,
+      "isMedic": false
+    }
+  ]
+}
+```
+
+---
+
+## GET /Turns/Create
+
+Returns the `_Create` partial view. Medics and available time slots are loaded from the in-memory cache (`IMemoryCache`) and bound to `ViewBag.Medics` and `ViewBag.Time` as `SelectList` objects respectively.
+
+**Required roles:** `Ingreso`, `Medico`
+
+**Response:** Partial view `_Create`
+
+---
+
+## POST /Turns/Create
+
+Creates a new appointment. The `TurnDTO` is mapped to a `Turn` entity via Mapster and persisted. On success, a SignalR `UpdateTableDirected` message is sent to the assigned doctor's connection so their appointment table refreshes immediately.
+
+**Required roles:** `Ingreso`, `Medico`
+
+**Request** — `application/x-www-form-urlencoded` or `application/json`
+
+<ParamField body="Id" type="string (GUID)">
+  Optional client-supplied ID; the database generates one automatically via `DatabaseGeneratedOption.Identity`.
+</ParamField>
+
+<ParamField body="Name" type="string" required>
+  Patient's full name.
+</ParamField>
+
+<ParamField body="Dni" type="integer" required>
+  Patient's national identity number.
+</ParamField>
+
+<ParamField body="MedicId" type="string (GUID)" required>
+  The `Id` of the `Medic` who owns this appointment.
+</ParamField>
+
+<ParamField body="Date" type="string">
+  Appointment date in `dd-MM-yyyy` or `dd/MM/yyyy` format. Defaults to today when absent.
+</ParamField>
+
+<ParamField body="TimeId" type="string (GUID)" required>
+  The `Id` of the `TimeTurn` slot selected for this appointment.
+</ParamField>
+
+<ParamField body="SocialWork" type="string">
+  Patient's health insurance / obra social name.
+</ParamField>
+
+<ParamField body="Reason" type="string">
+  Reason for the appointment. Trailing quotation marks are automatically stripped.
+</ParamField>
+
+**Responses**
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Turn created successfully. |
+| `409 Conflict` | An exception occurred during insertion (e.g. duplicate slot). |
+
+**Side effects:** Fires `UpdateTableDirected` on the SignalR hub to the assigned doctor's user connection, passing the doctor's name, a "new turn" message, and the formatted appointment date.
+
+---
+
+## GET /Turns/Edit/{id}
+
+Returns the `_Edit` partial view pre-populated with the existing `TurnDTO` for the given ID. Medics and time slots are injected into `ViewBag.Medics` and `ViewBag.TimeEdit`.
+
+**Required roles:** `Ingreso`
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Turn.Id` to edit.
+</ParamField>
+
+**Response:** Partial view `_Edit` with the `TurnDTO` model, or `null` when the turn is not found.
+
+---
+
+## PUT /Turns/Edit
+
+Persists changes to an existing appointment. On success, a SignalR `UpdateTableDirected` message is broadcast to all users in the `Ingreso` role so every reception terminal refreshes its table.
+
+**Required roles:** `Ingreso`
+
+**Request body** — same fields as `POST /Turns/Create`, plus `Id` (required).
+
+<ParamField body="Id" type="string (GUID)" required>
+  The `Turn.Id` to update. Used to verify existence before saving.
+</ParamField>
+
+**Responses**
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Turn updated successfully. |
+| `404 Not Found` | No turn with the given `Id` exists. |
+| `409 Conflict` | `ModelState` was invalid. |
+
+**Side effects:** Broadcasts `UpdateTableDirected` to every user in the `Ingreso` role.
+
+---
+
+## DELETE /Turns/Delete/{id}
+
+Deletes the specified appointment and notifies all connected clients.
+
+**Required roles:** `Admin`, `Ingreso`
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Turn.Id` to delete.
+</ParamField>
+
+**Response:** `200 OK`
+
+**Side effects:** Broadcasts `UpdateTable` to **all** SignalR hub connections (including Medico and Ingreso views).
+
+---
+
+## POST /Turns/Accessed/{id}
+
+Called by the doctor's interface when a patient enters the consultation room. Sets `Turn.Accessed = true` on the matching record. After updating, the server enumerates all `Ingreso` users and sends a `UpdateTableDirected` message to each so the front desk UI reflects the change in real time.
+
+**Required roles:** `Medico`
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Turn.Id` to mark as accessed.
+</ParamField>
+
+**Responses**
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Marked as accessed. |
+| NotFound view | The `id` was `null`, or the turn does not exist, or it fails the existence check. |
+
+**Side effects:** Sends `UpdateTableDirected` to each user in the `Ingreso` role individually.
+
+---
+
+## POST /Turns/CheckTurn
+
+Returns a boolean indicating whether a particular time slot is already taken for a given doctor and date. This is called client-side before confirming turn creation to prevent double-booking.
+
+**Required roles:** `Admin`, `Ingreso`
+
+**Request** — `application/x-www-form-urlencoded`
+
+<ParamField body="medicId" type="string (GUID)" required>
+  The medic to check availability for.
+</ParamField>
+
+<ParamField body="date" type="string (datetime)" required>
+  The requested appointment date/time.
+</ParamField>
+
+<ParamField body="timeTurn" type="string (GUID)" required>
+  The `TimeTurn.Id` of the requested slot.
+</ParamField>
+
+**Response:** `200 OK` with `true` (slot is taken) or `false` (slot is available) as the response body.
+
+---
+
+## POST /Turns/ExportExcel
+
+Generates an Excel workbook from the current filtered view (same filters as `InitializeTurns`) and returns it as a file download. Records are sorted ascending by appointment time before writing.
+
+**Required roles:** `Ingreso`, `Medico`
+
+**Request:** Same form parameters as `POST /Turns/InitializeTurns` (date, medicId, pagination).
+
+**Response:** `200 OK`
+
+- Content-Type: `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
+- Filename: `turnos.xlsx`
+- Columns: Nombre, DNI, Obra Social, Motivo, Médico, Fecha, Hora
+
+---
+
+## POST /Turns/ExportPdf
+
+Generates a PDF document from the current filtered view and returns it as a file download. Records are sorted ascending by appointment time. The PDF is built with QuestPDF and contains a header and a five-column table.
+
+**Required roles:** `Ingreso`, `Medico`
+
+**Request:** Same form parameters as `POST /Turns/InitializeTurns`.
+
+**Response:** `200 OK`
+
+- Content-Type: `application/pdf`
+- Filename: `turnos.pdf`
+- Columns: Nombre, DNI, Obra, Médico, Hora
+
+---
+
+## GET /TurnsPublic/Index
+
+Renders the public walk-in booking page. No authentication is required. The page displays a form backed by the same medics and time-slot data served to the authenticated create view, loaded from the in-memory cache.
+
+**Authentication:** Anonymous (`[AllowAnonymous]`)
+
+**Response:** HTML view `Index`
+
+---
+
+## POST /TurnsPublic/Create
+
+Accepts a walk-in booking submitted from the public page. The server overrides several fields to prevent manipulation: the date is always set to today, the reason is fixed to `"Turno espontáneo"`, and the `TimeId` is hard-coded to `78496444-276d-4389-8b2f-f668c5350e3f` (the walk-in slot). On success, a SignalR `UpdateTableDirected` message is sent to the assigned doctor.
+
+**Authentication:** Anonymous (`[AllowAnonymous]`)
+
+**Request** — `application/x-www-form-urlencoded`
+
+<ParamField body="Name" type="string" required>
+  Patient's full name.
+</ParamField>
+
+<ParamField body="Dni" type="integer" required>
+  Patient's national identity number.
+</ParamField>
+
+<ParamField body="MedicId" type="string (GUID)" required>
+  The doctor the patient wishes to see.
+</ParamField>
+
+<ParamField body="SocialWork" type="string">
+  Patient's health insurance name.
+</ParamField>
+
+**Server-set fields (not accepted from client):**
+
+| Field | Fixed value |
+|-------|-------------|
+| `Date` | `DateTime.Today` formatted as `dd/MM/yyyy` |
+| `TimeId` | `78496444-276d-4389-8b2f-f668c5350e3f` |
+| `Reason` | `"Turno espontáneo"` |
+
+**Responses**
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Walk-in turn created. |
+| `400 Bad Request` | `ModelState` is invalid. |
+| `409 Conflict` | An exception occurred during insertion. |
+
+**Side effects:** Fires `UpdateTableDirected` on the SignalR hub to the assigned doctor's user connection.

@@ -1,0 +1,460 @@
+---
+title: "Patient Medical Records: Visits, Allergies, Vaccines, and More"
+sidebarTitle: "Medical Records"
+description: "Document clinical visits, track allergies and vaccines, record growth measurements, manage permanent medications, and store background history per patient."
+---
+
+Turnero's medical records system is structured as a set of independent sub-modules, each covering one clinical domain. All sub-modules share a common design: they are scoped to a single `Patient`, accessible only to users with the **Medico** role, and rendered as DataTables panels embedded within the patient detail page. Data is submitted and retrieved through dedicated controllers. This page describes every sub-module, its data model, and the HTTP endpoints that drive it.
+
+---
+
+## Clinical Visits
+
+<Accordion title="Visit model and endpoints">
+
+A `Visit` captures the full clinical encounter between a doctor and a patient: why the patient came, what the diagnosis was, what treatment was prescribed, and any follow-up notes or study results.
+
+### Field reference
+
+| Field | Type | Description |
+|---|---|---|
+| `Id` | `Guid` | Auto-generated primary key |
+| `VisitDate` | `DateTime` | Date and time of the clinical encounter |
+| `Reason` | `string` | Chief complaint / reason for the visit |
+| `Diagnosis` | `string` | Clinical diagnosis code or label |
+| `DiagDescription` | `string` | Free-text elaboration of the diagnosis |
+| `Treatment` | `string` | Prescribed treatment plan |
+| `EvolutionNotes` | `string` | Progress or evolution notes at follow-up |
+| `LabResults` | `string` | Laboratory results narrative or reference |
+| `OtherStudies` | `string` | Imaging, ECG, or other ancillary study results |
+| `Observations` | `string` | General observations by the attending physician |
+| `MedicId` | `Guid` | FK — doctor who recorded the visit (set server-side) |
+| `PatientId` | `Guid` | FK — patient this visit belongs to |
+
+<Note>
+  `MedicId` is resolved on the server from the authenticated user's identity — it is never accepted from the client form. This prevents a doctor from recording a visit under a colleague's credentials.
+</Note>
+
+### Endpoints
+
+```http
+# Load the DataTables visits panel for a patient
+GET /Visits/Index?id={patientId}
+
+# Populate the visits table (DataTables AJAX)
+POST /Visits/InitializeVisits?patientId={patientId}
+
+# Load the create visit form (partial view)
+GET /Visits/Create?id={patientId}
+
+# Submit a new visit
+POST /Visits/Create
+Content-Type: application/x-www-form-urlencoded
+
+PatientId=3fa85f64-...&VisitDate=2025-06-15T09:30:00
+&Reason=Control+anual&Diagnosis=Z00.0&DiagDescription=Examen+de+salud+rutinario
+&Treatment=Sin+indicaciones&EvolutionNotes=Paciente+en+buen+estado
+
+# View a single visit
+GET /Visits/Details/{id}
+```
+
+All endpoints require the **Medico** role. The `POST /Visits/Create` endpoint requires the anti-forgery token.
+
+</Accordion>
+
+---
+
+## Allergies
+
+<Accordion title="Allergies model and endpoints">
+
+The allergies sub-module records each known allergen for a patient along with clinical metadata: when it first appeared, how severe it is, how often reactions occur, and its category (food, medication, environmental, etc.).
+
+### Field reference
+
+| Field | Type | Description |
+|---|---|---|
+| `Id` | `Guid` | Auto-generated primary key |
+| `Name` | `string` | Allergen name (required) |
+| `PatientId` | `Guid` | FK — owning patient |
+| `Begin` | `DateOnly` | Date the allergy was first identified |
+| `End` | `DateOnly?` | Date the allergy resolved (null if ongoing) |
+| `Description` | `string` | Clinical description of the reaction |
+| `Severity` | `Severity` | Enum — reaction severity level |
+| `Type` | `AllergyType` | Enum — allergen category |
+| `Occurrency` | `Occurrency` | Enum — how frequently reactions occur |
+| `Comments` | `string` | Additional clinical comments |
+
+### Enum values
+
+**`Severity`**
+
+| Value | Meaning |
+|---|---|
+| `Ninguna` | None |
+| `Minima` | Minimal |
+| `Baja` | Low |
+| `Media` | Moderate |
+| `Alta` | High |
+| `Severa` | Severe |
+| `Critica` | Critical |
+| `Fatal` | Fatal |
+
+**`AllergyType`**
+
+| Value | Meaning |
+|---|---|
+| `Comida` | Food |
+| `Medicina` | Medication |
+| `Ambiental` | Environmental |
+| `Insecto` | Insect |
+| `Otra` | Other |
+
+**`Occurrency`**
+
+| Value | Meaning |
+|---|---|
+| `Una` | Once |
+| `Sporadica` | Sporadic |
+| `Frequente` | Frequent |
+| `Constante` | Constant |
+
+### Endpoints
+
+```http
+# Load the allergies DataTables panel
+GET /Allergies/Index?id={patientId}
+
+# Populate the table (DataTables AJAX)
+POST /Allergies/InitializeAllergies?patientId={patientId}
+
+# Load the create allergy form
+GET /Allergies/Create?id={patientId}
+
+# Submit a new allergy (anti-forgery token required)
+POST /Allergies/Create
+Content-Type: application/x-www-form-urlencoded
+
+PatientId=3fa85f64-...&Name=Penicilina&Begin=2020-03-01
+&Severity=4&Type=1&Occurrency=2&Description=Rash+generalizado&Comments=Evitar+betalactámicos
+
+# Load the edit form
+GET /Allergies/Edit/{id}
+
+# Save edits (anti-forgery token required)
+POST /Allergies/Edit
+Content-Type: application/x-www-form-urlencoded
+
+Id=...&PatientId=3fa85f64-...&Name=Penicilina&Begin=2020-03-01&Severity=4&Type=1&Occurrency=2
+
+# Delete an allergy
+DELETE /Allergies/Delete/{id}
+
+# View a single allergy
+GET /Allergies/Details/{id}
+```
+
+<Tip>
+  `Severity`, `AllergyType`, and `Occurrency` are submitted as their integer enum values. The create/edit form dropdowns are populated server-side with `Enum.GetValues<T>()` so the integers and labels stay in sync automatically.
+</Tip>
+
+</Accordion>
+
+---
+
+## Vaccines
+
+<Accordion title="Vaccines model and endpoints">
+
+The vaccines sub-module tracks immunisations administered to the patient. Each record stores the vaccine type, an optional free-text description for custom vaccines, and the date it was applied.
+
+### Model fields
+
+| Field | Type | Description |
+|---|---|---|
+| `Id` | `Guid` | Auto-generated primary key |
+| `Description` | `string` | Resolved vaccine name (stored after `VaccinesDto` processing) |
+| `DateApplied` | `DateOnly?` | Date the vaccine was administered |
+| `PatientId` | `Guid` | FK — owning patient |
+
+The **`VaccinesDto`** transfer object adds an `OtherDescription` field for free-text input when the selected vaccine is `VaccinesEnum.Otra`:
+
+| DTO field | Type | Description |
+|---|---|---|
+| `Description` | `string` | Selected enum member name (e.g. `"BCG"`, `"HepatitisB"`) |
+| `OtherDescription` | `string` | Free-text name when `Description` is `"Otra"` |
+| `DateApplied` | `DateOnly?` | Date of administration |
+| `PatientId` | `Guid` | FK |
+
+### VaccinesEnum values
+
+| Value | Notes |
+|---|---|
+| `BCG` | Bacillus Calmette-Guérin (TB) |
+| `Sabin` | Oral polio vaccine |
+| `HepatitisB` | Hepatitis B |
+| `DPT` | Diphtheria, Pertussis, Tetanus |
+| `HIB` | *Haemophilus influenzae* type B |
+| `PRS` | Measles, Rubella, Mumps (triple viral) |
+| `DTa` | Acellular diphtheria-tetanus booster |
+| `HepatitisA` | Hepatitis A |
+| `Otra` (`-1`) | Other — requires `OtherDescription` |
+
+### Endpoints
+
+```http
+# Load the vaccines DataTables panel
+GET /Vaccines/Index?id={patientId}
+
+# Populate the table (DataTables AJAX)
+POST /Vaccines/InitializeVaccines?patientId={patientId}
+
+# Load the create vaccine form
+GET /Vaccines/Create?id={patientId}
+
+# Submit a new vaccine (anti-forgery token required)
+POST /Vaccines/Create
+Content-Type: application/x-www-form-urlencoded
+
+PatientId=3fa85f64-...&Description=HepatitisB&DateApplied=2025-01-10
+
+# Load the edit form
+GET /Vaccines/Edit/{id}
+
+# Save edits (anti-forgery token required)
+POST /Vaccines/Edit
+Content-Type: application/x-www-form-urlencoded
+
+Id=...&PatientId=3fa85f64-...&Description=Otra&OtherDescription=VacunaXYZ&DateApplied=2025-03-20
+
+# Delete a vaccine
+DELETE /Vaccines/Delete/{id}
+```
+
+All endpoints require the **Medico** role.
+
+</Accordion>
+
+---
+
+## Growth Charts
+
+<Accordion title="GrowthChart model and endpoints">
+
+Growth charts record longitudinal anthropometric measurements at each clinical encounter, enabling the doctor to track a child's physical development over time. Each entry stores age, weight, height, head circumference, their respective percentiles, and BMI.
+
+### Field reference
+
+| Field | Type | Precision | Description |
+|---|---|---|---|
+| `Id` | `Guid` | — | Auto-generated primary key |
+| `Age` | `decimal` | 6,3 | Patient age at measurement (e.g. `1.500` = 1.5 years) |
+| `Time` | `string` | — | Time label or visit descriptor |
+| `Weight` | `decimal` | 13,3 | Body weight in kg |
+| `WPerc` | `string` | — | Weight-for-age percentile string |
+| `Height` | `decimal` | 13,3 | Body height / length in cm |
+| `HPerc` | `string` | — | Height-for-age percentile string |
+| `HeadCircumference` | `decimal` | 13,3 | Head circumference in cm |
+| `HCPerc` | `string` | — | Head circumference percentile string |
+| `Bmi` | `decimal` | 13,3 | Body Mass Index |
+| `PatientId` | `Guid` | — | FK — owning patient |
+
+<Note>
+  Percentile values (`WPerc`, `HPerc`, `HCPerc`) are stored as free-form strings rather than computed values, giving the clinician flexibility to enter percentile ranges (e.g. `"P25-P50"`) or narrative annotations.
+</Note>
+
+### Endpoints
+
+```http
+# Load the growth chart DataTables panel
+GET /GrowthChart/Index?id={patientId}
+
+# Populate the table (DataTables AJAX)
+POST /GrowthChart/Initialize?patientId={patientId}
+
+# Load the create measurement form
+GET /GrowthChart/Create?id={patientId}
+
+# Submit a new measurement (anti-forgery token required)
+POST /GrowthChart/Create
+Content-Type: application/x-www-form-urlencoded
+
+PatientId=3fa85f64-...&Age=1.500&Time=18+meses
+&Weight=11.200&WPerc=P50&Height=81.500&HPerc=P50
+&HeadCircumference=47.000&HCPerc=P50&Bmi=16.910
+
+# Load the edit form
+GET /GrowthChart/Edit/{id}
+
+# Save edits (anti-forgery token required)
+POST /GrowthChart/Edit
+
+# Delete a measurement
+DELETE /GrowthChart/Delete/{id}
+```
+
+All endpoints require the **Medico** role.
+
+</Accordion>
+
+---
+
+## Permanent Medications
+
+<Accordion title="PermMed model and endpoints">
+
+Permanent medications (*medicación permanente*) track chronic or ongoing prescriptions that the patient takes indefinitely. Each entry is intentionally minimal: a free-text description and the patient it belongs to.
+
+### Model fields
+
+| Field | Type | Description |
+|---|---|---|
+| `Id` | `Guid` | Auto-generated primary key |
+| `Description` | `string` | Medication name, dosage, and/or frequency |
+| `PatientId` | `Guid` | FK — owning patient |
+
+### Endpoints
+
+```http
+# Load the permanent medications DataTables panel
+GET /PermMed/Index?id={patientId}
+
+# Populate the table (DataTables AJAX)
+POST /PermMed/Initialize?patientId={patientId}
+
+# Load the create form
+GET /PermMed/Create?id={patientId}
+
+# Submit a new permanent medication (anti-forgery token required)
+POST /PermMed/Create
+Content-Type: application/x-www-form-urlencoded
+
+PatientId=3fa85f64-...&Description=Salbutamol+2+puffs+c/8h
+
+# Delete a permanent medication
+DELETE /PermMed/Delete/{id}
+```
+
+<Note>
+  There is no edit endpoint for `PermMed`. To correct an entry, delete it and create a new one.
+</Note>
+
+</Accordion>
+
+---
+
+## Personal Background
+
+<Accordion title="PersonalBackground model">
+
+The personal background (*antecedentes personales*) record captures a patient's medical history as a set of boolean flags covering common childhood and chronic conditions, plus a free-text `Other` field for anything not covered by the predefined list.
+
+| Field | C# type | Display label |
+|---|---|---|
+| `Asthma` | `bool` | Asma |
+| `Allergy` | `bool` | Alergias |
+| `Pulmonologist` | `bool` | Neumonológicos |
+| `Pneumonia` | `bool` | Neumonías |
+| `Mumps` | `bool` | Paperas |
+| `Psicologicals` | `bool` | Psicológicos |
+| `Accidents` | `bool` | Accidentes |
+| `HematOnc` | `bool` | Hematooncológicos |
+| `Rubella` | `bool` | Rubeola |
+| `Otitis` | `bool` | Otítis |
+| `Measles` | `bool` | Sarampión |
+| `Chickenpox` | `bool` | Varicela |
+| `UrinaryInfections` | `bool` | Infecciones Urinarias |
+| `Surgeries` | `bool` | Cirugías |
+| `Diabetes` | `bool` | Diabetes |
+| `Digestive` | `bool` | Digestivos |
+| `Other` | `string` | Otros — Especificar |
+
+`PersonalBackground` inherits from `PatientFKEntity` and is linked one-to-one with its `Patient`. Only a single record exists per patient.
+
+</Accordion>
+
+---
+
+## Perinatal Background
+
+<Accordion title="PerinatalBackground model">
+
+The perinatal background (*antecedentes perinatales*) captures data from the patient's birth and the mother's obstetric history. All numeric fields store integer measurements.
+
+| Field | Type | Display label | Description |
+|---|---|---|---|
+| `Feat` | `int` | Gesta | Gestational count (number of pregnancies) |
+| `Delivery` | `int` | Parto | Number of vaginal deliveries |
+| `Cesarean` | `int` | Cesárea | Number of caesarean sections |
+| `Abort` | `int` | Aborto | Number of abortions/miscarriages |
+| `Weight` | `int` | Peso | Birth weight (grams) |
+| `Height` | `int` | Talla | Birth length (mm or cm — entered by clinician) |
+| `CefPer` | `int` | Perímetro Cefálico | Cephalic perimeter at birth (mm) |
+| `Apgar1` | `int` | Apgar 1′ | Apgar score at 1 minute |
+| `Apgar5` | `int` | Apgar 5′ | Apgar score at 5 minutes |
+| `GestAge` | `int` | Edad Gestacional | Gestational age in weeks |
+| `Pathologies` | `string` | Patologías | Free-text description of maternal or neonatal pathologies |
+| `CongErrors` | `string` | Errores Congénitos | Free-text reference to congenital errors noted at birth |
+
+`PerinatalBackground` inherits from `PatientFKEntity` and is linked one-to-one with its `Patient`.
+
+</Accordion>
+
+---
+
+## Congenital Errors (Neonatal Screening)
+
+<Accordion title="CongErrors model">
+
+The congenital errors (*errores congénitos*) record stores the results of Argentina's mandatory neonatal metabolic screening panel. Each condition is represented by a boolean flag (was it tested?) and a companion string for the result value.
+
+### Model fields
+
+| Condition flag | Result field | Display label |
+|---|---|---|
+| `CongHypothyroidism` | `ResultHypothyroidism` | Hipotiroidismo congénito |
+| `Phenylalanine` | `ResultPhenylalanine` | Fenilcetonuria |
+| `FQP` | `ResultFQP` | Fibrosis quística del páncreas |
+| `Biotinidase` | `ResultBiotinidase` | Deficiencia de biotinidasa |
+| `Galactosemia` | `ResultGalactosemia` | Galactosemia |
+| `OHP` | `ResultOHP` | 17-OH Hidroxiprogesterona Neo |
+| `Other` | — | Otras (free text) |
+
+### Result values
+
+The `CongErrorsResults` constants class defines the three valid result strings:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `CongErrorsResults.NA` | `"-"` | Not applicable / not tested |
+| `CongErrorsResults.Normal` | `"Normal"` | Screening result normal |
+| `CongErrorsResults.Patological` | `"Patológico"` | Screening result abnormal / pathological |
+
+`CongErrors` inherits from `PatientFKEntity` and is linked one-to-one with its `Patient`.
+
+</Accordion>
+
+---
+
+## Parents Data
+
+<Accordion title="ParentsData model">
+
+The parents data (*datos de los padres*) record stores demographic information about the patient's biological parents and the number of siblings. This record is surfaced in the patient detail view via `ViewBag.ParentsData`.
+
+| Field | Type | Display label | Description |
+|---|---|---|---|
+| `FatherName` | `string` | Nombre del padre | Father's full name |
+| `FatherBirthDate` | `DateOnly` | Fecha de nacimiento del padre | Father's date of birth |
+| `FatherBloodType` | `BloodType` | Tipo sanguíneo del padre | Father's ABO/Rh blood group |
+| `FatherWork` | `string` | Trabajo del padre | Father's occupation |
+| `MotherName` | `string` | Nombre de la madre | Mother's full name |
+| `MotherBirthDate` | `DateOnly` | Fecha de nacimiento de la madre | Mother's date of birth |
+| `MotherBloodType` | `BloodType` | Tipo sanguíneo de la madre | Mother's ABO/Rh blood group |
+| `MotherWork` | `string` | Trabajo de la madre | Mother's occupation |
+| `BrothersCount` | `int` | Cantidad de hermanos | Number of siblings |
+
+`ParentsData` inherits from `PatientFKEntity` and is linked one-to-one with its `Patient`. The `BloodType` enum values are identical to those used on the patient profile — see the [Patients page](/features/patients#bloodtype-enum) for the full list.
+
+</Accordion>
