@@ -1,5 +1,5 @@
 ---
-title: "Registering and Configuring Doctors (Medics)"
+title: "Registering and Configuring Medics in Turnero"
 sidebarTitle: "Medics"
 description: "Register doctors in Turnero, link them to their Identity user account, and manage their profiles so they appear in the appointment scheduling interface."
 ---
@@ -108,7 +108,7 @@ Before creating a Medic record, two steps must be completed:
 
 ## Editing a Medic
 
-Navigate to **GET `/Medics/Edit/{id}`** to load the existing record. Submit changes to **POST `/Medics/Edit`**. The controller verifies the record exists via `MedicExists(medic.Id)` before calling `updateMedicServices.Update(medic)`.
+**GET `/Medics/Edit/{id}`** does not render an edit form — it validates that the record exists and then immediately redirects to the medic index at `/Medics/Index`. To update a medic's details, submit directly to **POST `/Medics/Edit`** with the updated `Medic` model. The controller verifies the record exists via `MedicExists(medic.Id)` before calling `updateMedicServices.Update(medic)` and redirecting to the index.
 
 <Note>
   If you need to relink a medic to a different Identity user (for example, after recreating a login account), update the `UserGuid` field to the new user's `IdentityUser.Id`. The SignalR notifications will then route to the new account's browser session.
@@ -119,11 +119,11 @@ Navigate to **GET `/Medics/Edit/{id}`** to load the existing record. Submit chan
 ## Deleting a Medic
 
 <Steps>
-  <Step title="Open the confirmation page">
-    Navigate to **GET `/Medics/Delete/{id}`** to load the record and display the deletion confirmation view.
+  <Step title="Trigger the deletion">
+    **GET `/Medics/Delete/{id}`** does not display a confirmation view — it validates that the record exists and immediately redirects to `/Medics/Index`. Deletion is confirmed by submitting directly to the POST endpoint.
   </Step>
   <Step title="Confirm the deletion">
-    Submit to **POST `/Medics/Delete`** (action name `Delete`, mapped to `DeleteConfirmed`). The controller calls `updateMedicServices.Delete(medic)` and redirects to the index.
+    Submit to **POST `/Medics/Delete`** (action name `Delete`, mapped to `DeleteConfirmed`). The controller calls `updateMedicServices.Delete(medic)` — a soft delete via the update service — and redirects to the index.
   </Step>
 </Steps>
 
@@ -141,10 +141,10 @@ Navigate to **GET `/Medics/Edit/{id}`** to load the existing record. Submit chan
 | `GET` | `/Medics/Details/{id}` | View a single medic's details |
 | `GET` | `/Medics/CreateAsync` | Show the create form (loads Medico-role users) |
 | `POST` | `/Medics/Create` | Save a new medic record |
-| `GET` | `/Medics/Edit/{id}` | Show the edit form for an existing medic |
+| `GET` | `/Medics/Edit/{id}` | Validates record exists, then redirects to Index |
 | `POST` | `/Medics/Edit` | Save changes to an existing medic |
-| `GET` | `/Medics/Delete/{id}` | Show the deletion confirmation page |
-| `POST` | `/Medics/Delete` | Confirm and delete the medic record |
+| `GET` | `/Medics/Delete/{id}` | Validates record exists, then redirects to Index |
+| `POST` | `/Medics/Delete` | Soft-delete the medic record (via `updateMedicServices.Delete`) |
 
 <Note>
   All routes under `/Medics/` require the `Admin` role. Doctors themselves cannot edit or delete their own medic records.

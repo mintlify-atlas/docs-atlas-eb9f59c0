@@ -81,7 +81,23 @@ Then add or update the connection string section:
 | `GrowthCharts` | Anthropometric growth data |
 | `CongErrors` | Congenital anomaly records |
 
-Column-type overrides are applied in `OnModelCreating` — for example, all `DateTime?` properties on `Allergies` are mapped to the PostgreSQL `date` type, and string properties on `Visit` and `ParentsData` are given empty-string defaults to prevent null surprises.
+Column-type overrides and default-value constraints are applied in `OnModelCreating`. The full set of rules is:
+
+| Entity | Property type | Override |
+|---|---|---|
+| `Turn` | `DateTurn` | SQL `date` column type |
+| `Patient` | `BirthDate` | SQL `date` column type |
+| `Visit` | `VisitDate` | SQL `date` column type |
+| `Allergies` | All `DateTime?` properties | SQL `date` column type, default `null` |
+| `Visit` | All `string` properties | Default `""` (empty string) |
+| `PersonalBackground` | All `bool` properties | Default `false` |
+| `ParentsData` | All `string` properties | Default `""` (empty string) |
+| `ParentsData` | All `DateOnly` properties | SQL `date` column type, default `DateOnly.MinValue` |
+| `ParentsData` | All `int` properties | Default `0` |
+| `CongErrors` | All `string` properties | Default `""` (empty string) |
+| `PerinatalBackground` | All `int` properties | Default `0` |
+
+These rules prevent null surprises and ensure consistent defaults when records are inserted without all optional fields populated.
 
 ## Applying Migrations
 

@@ -1,7 +1,7 @@
 ---
 title: "Administration Controller: User, Role, and Claims Management"
 sidebarTitle: "Administration"
-description: "Reference for AdministrationController, RoleController, MedicsController, TimeTurnController, and FirebaseController endpoints. Most require the Admin role."
+description: "Reference for AdministrationController, RoleController, MedicsController, TimeTurnController, and FirebaseController. Admin role required for most actions."
 ---
 
 Turnero groups its back-office management functionality across five controllers. `AdministrationController` handles ASP.NET Core Identity user and role administration — including claims management and role-membership editing. `RoleController` provides basic CRUD for `IdentityRole` records. `MedicsController` manages the `Medic` catalogue that links Identity users to doctor profiles used throughout the scheduling system. `TimeTurnController` manages the `TimeTurn` time-slot catalogue that populates appointment time dropdowns. `FirebaseController` is a JSON API controller that delegates Firebase Authentication operations to an `IFirebaseService` and is entirely unauthenticated.
@@ -30,7 +30,7 @@ The `AdministrationController` class is decorated with `[Authorize(Roles = "Admi
 | `POST` | `/Administration/DeleteRole` | Admin | Deletes a role |
 | `GET` | `/Administration/ManageUserClaims` | Admin | User claims form |
 | `POST` | `/Administration/ManageUserClaims` | Admin | Saves claim assignments |
-| `GET` | `/Administration/EditUsersInRole/{roleId}` | Admin | Role membership form |
+| `GET` | `/Administration/EditUsersInRole` | Admin | Role membership form |
 | `POST` | `/Administration/EditUsersInRole` | Admin | Saves role membership |
 
 ---
@@ -210,12 +210,12 @@ Replaces the user's claims entirely: first removes all existing claims, then add
 
 ---
 
-### GET /Administration/EditUsersInRole/{roleId}
+### GET /Administration/EditUsersInRole
 
 Builds a list of all users with a flag indicating whether each is currently in the specified role. Returns the `EditUsersInRole` view.
 
-<ParamField path="roleId" type="string" required>
-  The `IdentityRole.Id` whose membership to edit.
+<ParamField query="roleId" type="string" required>
+  The `IdentityRole.Id` whose membership to edit. Passed as a query string parameter (e.g. `/Administration/EditUsersInRole?roleId=...`).
 </ParamField>
 
 **Response:** HTML view `EditUsersInRole` with `List<UserRoleViewModel>`, or `NotFound` view.

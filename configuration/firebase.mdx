@@ -107,9 +107,14 @@ Registers a new user in both Firebase Authentication and ASP.NET Identity. The u
 {
   "name":     "DrSmith",
   "email":    "smith@clinic.example",
-  "password": "secret123"
+  "password": "secret123",
+  "role":     null
 }
 ```
+
+<Note>
+  The `role` field is part of `UserFirebaseDTO` but is **not used** by the `/register` endpoint. The role is assigned automatically based on the `name` value: `"Administrador"` → Admin, `"Ingreso"` / `"IngresoPruebas"` → Ingreso, any other name → Medico. You may omit `role` or set it to `null` when calling this endpoint.
+</Note>
 
 **Response**: a Firebase `UserRecord` object containing the new user's UID, email, and display name.
 
@@ -176,13 +181,28 @@ public class UserLoginRequestDTO
 ```csharp
 public class AuthFirebase
 {
-    public string? Kind         { get; set; }
-    public string? LocalId      { get; set; }
-    public string? Email        { get; set; }
-    public string? DisplayName  { get; set; }
-    public string? IdToken      { get; set; }
-    public bool    Registered   { get; set; }
+    [JsonPropertyName("kind")]
+    public string? Kind { get; set; }
+
+    [JsonPropertyName("localId")]
+    public string? LocalId { get; set; }
+
+    [JsonPropertyName("email")]
+    public string? Email { get; set; }
+
+    [JsonPropertyName("displayName")]
+    public string? DisplayName { get; set; }
+
+    [JsonPropertyName("idToken")]
+    public string? IdToken { get; set; }
+
+    [JsonPropertyName("registered")]
+    public bool Registered { get; set; }
+
+    [JsonPropertyName("refreshToken")]
     public string? RefreshToken { get; set; }
-    public long    ExpiresIn    { get; set; }
+
+    [JsonPropertyName("expiresIn")]
+    public long ExpiresIn { get; set; }
 }
 ```

@@ -1,7 +1,7 @@
 ---
-title: "Managing Users, Roles, and Claims in Turnero"
+title: "Turnero Users, Roles, and Claims Administration"
 sidebarTitle: "Users & Roles"
-description: "Create and assign roles in Turnero, manage user claims, and control feature access with Admin, Medico, and Ingreso role-based permissions."
+description: "Create and assign roles in Turnero, manage user claims, and control access using Admin, Medico, and Ingreso role-based permissions."
 ---
 
 Turnero uses ASP.NET Core Identity to secure every part of the application. Three built-in roles — `Admin`, `Medico`, and `Ingreso` — map to the distinct responsibilities of clinic staff. An administrator controls who can access the system and what they can do; reception staff book and manage appointments; and doctors interact with patient records and mark arrivals. All routes under the `Administration` and `Role` controllers are guarded by the `Admin` role, so only a user holding that role can manage other users, create roles, or assign claims.

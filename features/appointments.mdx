@@ -1,5 +1,5 @@
 ---
-title: "Scheduling and Managing Patient Appointments"
+title: "Patient Appointments: Book, Track, and Export Turns"
 sidebarTitle: "Appointments"
 description: "Book, filter, edit, and track daily patient appointments in Turnero. Supports real-time updates, public walk-in booking, Excel and PDF export."
 ---
@@ -189,11 +189,11 @@ The server automatically fills in the following values regardless of what the cl
 
 | Field | Value set by server |
 |---|---|
-| `Date` | Today (`DateTime.Today`) |
+| `Date` | Today (`DateTime.Today`, formatted as `dd/MM/yyyy`) |
 | `Reason` | `"Turno espontáneo"` |
 | `TimeId` | `78496444-276d-4389-8b2f-f668c5350e3f` (the default walk-in slot) |
 
-The assigned doctor receives a SignalR notification identical to a regular booking.
+After creating the turn, the assigned doctor receives a single-argument `UpdateTableDirected` SignalR push: `"La tabla se ha actualizado"`. This differs from the authenticated create flow, which sends the doctor's name, a message string, and the appointment date as three separate arguments.
 
 <Note>
   The public endpoint is decorated with `[AllowAnonymous]` and does not enforce CSRF validation, making it suitable for an unattended kiosk or a waiting-room tablet.

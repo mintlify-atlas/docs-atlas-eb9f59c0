@@ -1,10 +1,10 @@
 ---
-title: "Medical History Controllers: Visits, Allergies, Vaccines, and More"
+title: "Medical History: Visits, Allergies, Vaccines & Backgrounds"
 sidebarTitle: "Medical History"
-description: "Reference for VisitsController, AllergiesController, VaccinesController, GrowthChartController, PermMedController, PersonalBackgroundController, and PerinatalBackgroundController endpoints."
+description: "Reference for Turnero's clinical history controllers: visits, allergies, vaccines, growth charts, permanent medications, and patient background records."
 ---
 
-Turnero organises a patient's clinical history across seven specialised controllers, each responsible for a distinct category of medical data. Every controller in this group requires the `Medico` role. All list endpoints follow the same DataTables server-side pattern: a `GET` action renders a partial view containing an empty `<table>` placeholder, and a companion `POST` initialisation endpoint provides the JSON data feed. Create and edit forms are delivered as partial views embedded inside the patient detail page, keeping the UI entirely Ajax-driven without full page reloads.
+Turnero organises a patient's clinical history across seven specialised controllers, each responsible for a distinct category of medical data. Most controllers in this group carry a class-level `[Authorize(Roles = "Medico")]` attribute (`VisitsController`, `VaccinesController`, `GrowthChartController`, `PermMedController`, `PersonalBackgroundController`). `AllergiesController` has no authorization attributes at all, and `PerinatalBackgroundController` also carries no class-level `[Authorize]` — for both, access is governed by the application's global middleware policies. All list endpoints follow the same DataTables server-side pattern: a `GET` action renders a partial view containing an empty `<table>` placeholder, and a companion `POST` initialisation endpoint provides the JSON data feed. Create and edit forms are delivered as partial views embedded inside the patient detail page, keeping the UI entirely Ajax-driven without full page reloads.
 
 The `patientId` parameter accepted by the DataTables initialisation endpoints is resolved flexibly: the server checks (in priority order) a querystring parameter, a form field named `patientId` or `patientid`, a form column-search value ending in `[search][value]`, any GUID-shaped form value, and — for JSON content types — a JSON body property. This resilience means the endpoints work regardless of how DataTables serialises the extra search parameter.
 
@@ -167,18 +167,20 @@ Returns the `_Details` partial view for a single visit, populated with the full 
 
 `AllergiesController` tracks a patient's allergy history. Each `Allergies` record captures the allergen name, begin and optional end date, description, severity (8-level enum from `Ninguna` to `Fatal`), allergy type (`Comida`, `Medicina`, `Ambiental`, `Insecto`, `Otra`), frequency of occurrence (`Una`, `Sporadica`, `Frequente`, `Constante`), and free-form comments.
 
+`AllergiesController` carries **no** class-level `[Authorize]` attribute and no method-level authorization annotations on any action. Access control is enforced at the application's global middleware/policy level rather than in the controller itself.
+
 ### Endpoint summary
 
 | Method | Path | Roles | Description |
 |--------|------|-------|-------------|
-| `GET` | `/Allergies/Index/{id}` | Medico | Returns `_AllergiesTable` partial |
-| `POST` | `/Allergies/InitializeAllergies` | Medico | DataTables data feed |
-| `GET` | `/Allergies/Create/{id}` | Medico | Returns `_Create` partial |
-| `POST` | `/Allergies/Create` | Medico | Inserts a new allergy |
-| `GET` | `/Allergies/Edit/{id}` | Medico | Returns `_Create` partial pre-filled for editing |
-| `POST` | `/Allergies/Edit` | Medico | Updates an allergy |
-| `DELETE` | `/Allergies/Delete/{id}` | Medico | Deletes an allergy |
-| `GET` | `/Allergies/Details/{id}` | Medico | Returns `_Details` partial for one allergy |
+| `GET` | `/Allergies/Index/{id}` | None (global policy) | Returns `_AllergiesTable` partial |
+| `POST` | `/Allergies/InitializeAllergies` | None (global policy) | DataTables data feed |
+| `GET` | `/Allergies/Create/{id}` | None (global policy) | Returns `_Create` partial |
+| `POST` | `/Allergies/Create` | None (global policy) | Inserts a new allergy |
+| `GET` | `/Allergies/Edit/{id}` | None (global policy) | Returns `_Create` partial pre-filled for editing |
+| `POST` | `/Allergies/Edit` | None (global policy) | Updates an allergy |
+| `DELETE` | `/Allergies/Delete/{id}` | None (global policy) | Deletes an allergy |
+| `GET` | `/Allergies/Details/{id}` | None (global policy) | Returns `_Details` partial for one allergy |
 
 ---
 

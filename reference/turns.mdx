@@ -1,7 +1,7 @@
 ---
 title: "Turns Controller: Appointment Scheduling Endpoints"
 sidebarTitle: "Turns"
-description: "Complete reference for all TurnsController and TurnsPublicController endpoints — appointment CRUD, DataTables integration, export, and public walk-in booking."
+description: "Reference for TurnsController and TurnsPublicController endpoints — appointment CRUD, DataTables integration, file export, and anonymous walk-in booking."
 ---
 
 The `TurnsController` is the primary surface for managing clinic appointments in Turnero. It handles the full lifecycle of a turn (appointment): creating, listing, editing, marking as accessed, and deleting records. The controller is backed by a suite of injected services for data access and uses a SignalR hub (`TurnsTableHub`) to push real-time table updates to connected browsers. A companion `TurnsPublicController` exposes an unauthenticated booking page that lets walk-in patients register themselves for a same-day appointment without requiring a staff login.
@@ -12,6 +12,7 @@ The `TurnsController` is the primary surface for managing clinic appointments in
 |--------|------|-------|-------------|
 | `GET` | `/Turns/Index` | Ingreso, Medico | Appointment list page |
 | `POST` | `/Turns/InitializeTurns` | Ingreso, Medico | DataTables server-side data feed |
+| `GET` | `/Turns/Details/{id}` | Ingreso, Medico | Turn detail view |
 | `GET` | `/Turns/Create` | Ingreso, Medico | Returns `_Create` partial view |
 | `POST` | `/Turns/Create` | Ingreso, Medico | Inserts a new turn |
 | `GET` | `/Turns/Edit/{id}` | Ingreso | Returns `_Edit` partial view |
@@ -20,7 +21,7 @@ The `TurnsController` is the primary surface for managing clinic appointments in
 | `POST` | `/Turns/Accessed/{id}` | Medico | Marks turn as accessed by doctor |
 | `POST` | `/Turns/CheckTurn` | Admin, Ingreso | Checks slot availability |
 | `POST` | `/Turns/ExportExcel` | Ingreso, Medico | Downloads current view as `.xlsx` |
-| `POST` | `/Turns/ExportPdf` | Ingreso, Medico | Downloads current view as `.pdf` |
+| `POST` | `/Turns/ExportPdf` | None | Downloads current view as `.pdf` |
 | `GET` | `/TurnsPublic/Index` | Anonymous | Public walk-in booking page |
 | `POST` | `/TurnsPublic/Create` | Anonymous | Submits a public walk-in turn |
 
@@ -33,6 +34,20 @@ Renders the main appointment management view. When the authenticated user is a d
 **Required roles:** `Ingreso`, `Medico`
 
 **Response:** HTML view `Index`
+
+---
+
+## GET /Turns/Details/{id}
+
+Returns the full detail view for a single appointment.
+
+**Required roles:** `Ingreso`, `Medico`
+
+<ParamField path="id" type="string (GUID)" required>
+  The `Turn.Id` to display.
+</ParamField>
+
+**Response:** HTML view `Details` with the `Turn` model, or `404 Not Found` when no turn with that ID exists.
 
 ---
 
@@ -284,7 +299,7 @@ Generates an Excel workbook from the current filtered view (same filters as `Ini
 
 Generates a PDF document from the current filtered view and returns it as a file download. Records are sorted ascending by appointment time. The PDF is built with QuestPDF and contains a header and a five-column table.
 
-**Required roles:** `Ingreso`, `Medico`
+**Required roles:** None (no `[Authorize]` attribute is applied to this action).
 
 **Request:** Same form parameters as `POST /Turns/InitializeTurns`.
 

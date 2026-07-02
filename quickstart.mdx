@@ -1,5 +1,5 @@
 ---
-title: "Get Started with Turnero in Under 10 Minutes"
+title: "Quickstart: Run Turnero Locally in Under 10 Minutes"
 sidebarTitle: "Quickstart"
 description: "Clone Turnero, configure a PostgreSQL database and connection string, apply EF Core migrations, and run the app locally in a few steps."
 ---
@@ -38,7 +38,7 @@ Getting Turnero running locally requires only a PostgreSQL server and the .NET 1
 
     The repository contains four .NET projects in a single solution:
 
-    ```
+    ```text
     Turnero/          ← ASP.NET Core MVC host (this is the startup project)
     Turnero.DAL/      ← EF Core DbContext, models, repositories, migrations
     Turnero.SL/       ← Business-logic services
@@ -98,7 +98,7 @@ Getting Turnero running locally requires only a PostgreSQL server and the .NET 1
 
     The application boots, pre-warms its in-memory caches (time slots and doctors), then begins listening. You should see output similar to:
 
-    ```
+    ```text
     info: Microsoft.Hosting.Lifetime[14]
           Now listening on: https://localhost:5001
     info: Microsoft.Hosting.Lifetime[14]

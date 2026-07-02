@@ -1,5 +1,5 @@
 ---
-title: "Turnero: Medical Appointment & Records Platform"
+title: "Turnero: ASP.NET Core Clinic Appointment Scheduler"
 sidebarTitle: "Introduction"
 description: "Turnero is an open-source ASP.NET Core web app for clinic appointment scheduling and patient medical record management, built on PostgreSQL and SignalR."
 ---
@@ -70,7 +70,7 @@ Turnero ships with a service worker and web manifest, allowing it to be installe
 
 Turnero follows a classic three-layer separation of concerns, expressed as four .NET projects inside the same solution:
 
-```
+```text
 Turnero/                  ← ASP.NET Core MVC host (controllers, views, hubs, Program.cs)
 Turnero.DAL/              ← Data Access Layer (EF Core DbContext, models, migrations, repositories)
 Turnero.SL/               ← Service Layer (business logic, interfaces, service implementations)

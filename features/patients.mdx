@@ -1,5 +1,5 @@
 ---
-title: "Registering and Managing Clinic Patients"
+title: "Managing Clinic Patients: Profiles, History, and Search"
 sidebarTitle: "Patients"
 description: "Create and manage patient profiles in Turnero, including contact info, insurance details, blood type, and birth date. Accessible to the Medico role."
 ---
@@ -44,6 +44,10 @@ public class Patient : BaseEntity
 | `AffiliateNumber` | `string` | — | Insurance membership / affiliate number |
 | `BloodType` | `BloodType` | Enum | ABO + Rh blood group |
 | `ContactInfo` | `ContactInfo` | — | Owned object with phone, email, address |
+
+<Note>
+  `Patient.Dni` is stored as `string?` with a `[StringLength(10, MinimumLength = 6)]` validation constraint, allowing for leading zeros or formatted document numbers. The `PatientDTO` used in list responses maps `Dni` to `int?` for compact serialisation. When creating or editing a patient, submit `Dni` as a string in the form body; the list endpoint will return it as an integer.
+</Note>
 
 ### BloodType enum
 
